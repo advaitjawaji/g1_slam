@@ -9,9 +9,13 @@
 set -e
 
 POLICY_ARG=""
-if [ "$1" == "--policy" ] && [ -n "$2" ]; then
-    POLICY_ARG="--policy $2"
-fi
+VIEWER_ARG=""
+for arg in "$@"; do
+    case $arg in
+        --policy) POLICY_ARG="--policy $2"; shift 2;;
+        --viewer) VIEWER_ARG="--viewer";;
+    esac
+done
 
 WS_DIR="$(cd "$(dirname "$0")/ros2_ws" && pwd)"
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -63,7 +67,7 @@ tmux split-window -v -t g1_sim:0.1
 
 # ── Pane 0 (top-left): Genesis bridge ────────────────────────────────────
 tmux send-keys -t g1_sim:0.0 \
-    "cd $REPO_DIR && $SOURCE_CMD && echo '=== GENESIS BRIDGE ===' && python3 genesis_sim/genesis_node.py $POLICY_ARG" \
+    "cd $REPO_DIR && $SOURCE_CMD && echo '=== GENESIS BRIDGE ===' && python3 genesis_sim/genesis_node.py $POLICY_ARG $VIEWER_ARG" \
     Enter
 
 # ── Pane 1 (top-right): ROS2 stack ───────────────────────────────────────

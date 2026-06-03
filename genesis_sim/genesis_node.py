@@ -333,7 +333,7 @@ class HumanActor:
         self._entity.set_pos(self.pos)
 
 
-def build_scene(node: GenesisNode, policy_path: str | None = None):
+def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: bool = False):
     """Build and run the Genesis scene."""
 
     # ── RL Policy ─────────────────────────────────────────────────────────
@@ -342,11 +342,17 @@ def build_scene(node: GenesisNode, policy_path: str | None = None):
     mode = "RL walking" if use_rl else "kinematic floating"
     node.get_logger().info(f"Locomotion mode: {mode}")
 
-    gs.init(backend=gs.cpu, logging_level="warning")
+    backend = gs.cuda if use_viewer else gs.cpu
+    gs.init(backend=backend, logging_level="warning")
 
     scene = gs.Scene(
-        show_viewer=False,
+        show_viewer=use_viewer,
         sim_options=gs.options.SimOptions(dt=node.SIM_DT),
+        viewer_options=gs.options.ViewerOptions(
+            camera_pos=(5, -5, 4),
+            camera_lookat=(0, 0, 1),
+            camera_fov=50,
+        ) if use_viewer else None,
     )
 
     # Ground plane
@@ -566,6 +572,10 @@ def main():
         help="Path to RL policy checkpoint (.pt). "
              "Download from https://github.com/unitreerobotics/unitree_rl_gym"
     )
+    parser.add_argument(
+        "--viewer", action="store_true",
+        help="Enable Genesis GPU viewer window (requires NVIDIA GPU)"
+    )
     args, _ = parser.parse_known_args()
 
     rclpy.init()
@@ -577,7 +587,7 @@ def main():
         node.get_logger().info("No policy provided — using kinematic floating mode.")
 
     try:
-        build_scene(node, policy_path=args.policy)
+        build_scene(node, policy_path=args.policy, use_viewer=args.viewer)
     except KeyboardInterrupt:
         node.get_logger().info("Genesis simulation stopped.")
     finally:
