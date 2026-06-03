@@ -342,7 +342,12 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
     mode = "RL walking" if use_rl else "kinematic floating"
     node.get_logger().info(f"Locomotion mode: {mode}")
 
+    # Viewer mode: use GPU but reduce camera res + rate to avoid double-render lag
     backend = gs.cuda if use_viewer else gs.cpu
+    cam_w   = 320 if use_viewer else CAM_W
+    cam_h   = 240 if use_viewer else CAM_H
+    cam_hz  = 5   if use_viewer else node.PUB_HZ
+
     gs.init(backend=backend, logging_level="warning")
 
     scene = gs.Scene(
@@ -379,7 +384,7 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
 
     # Camera at d435_link (xyz="0.0576235 0.01753 0.41987" from torso_link)
     camera = scene.add_camera(
-        res=(CAM_W, CAM_H),
+        res=(cam_w, cam_h),
         pos=(0.06, 0.02, 1.22),
         lookat=(1.0, 0.0, 0.8),
         fov=CAM_FOV_DEG,
@@ -413,7 +418,7 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
     node.get_logger().info(f"Genesis scene built. Starting {mode} loop.")
 
     # ── Timing ────────────────────────────────────────────────────────────
-    cam_interval   = 1.0 / node.PUB_HZ
+    cam_interval   = 1.0 / cam_hz
     imu_interval   = 1.0 / node.IMU_HZ
     odom_interval  = 1.0 / node.ODOM_HZ
     policy_interval = policy._policy_dt if use_rl else 9999
@@ -485,9 +490,11 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
             robot_yaw += wz * dt
             robot_x   += (vx * math.cos(robot_yaw) - vy * math.sin(robot_yaw)) * dt
             robot_y   += (vx * math.sin(robot_yaw) + vy * math.cos(robot_yaw)) * dt
-            cy, sy = math.cos(robot_yaw), math.sin(robot_yaw)
+            # Genesis quaternion format: (w, x, y, z) — yaw rotation around Z axis
+            qw = math.cos(robot_yaw / 2)
+            qz = math.sin(robot_yaw / 2)
             robot.set_pos((robot_x, robot_y, 0.85))
-            robot.set_quat((0.0, 0.0, sy * 0.7071, cy * 0.7071))
+            robot.set_quat((qw, 0.0, 0.0, qz))
 
         # Move camera to follow robot
         cam_x = robot_x + 0.06 * cy
