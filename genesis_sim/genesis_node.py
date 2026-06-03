@@ -5,18 +5,25 @@ Runs Genesis physics + rendering in one thread, publishes ROS2 topics in another
 Validates the full pipeline: SLAM + detection + Nav2 + avoidance logic.
 
 Usage:
-    # Terminal 1 — Genesis bridge
+    # Without RL policy (kinematic floating):
     python3 genesis_sim/genesis_node.py
+
+    # With RL policy (realistic walking):
+    python3 genesis_sim/genesis_node.py --policy /path/to/g1_policy.pt
+
+    Download policy checkpoint from:
+    https://github.com/unitreerobotics/unitree_rl_gym  (g1/policy.pt)
 
     # Terminal 2 — ROS2 stack
     ros2 launch g1_bringup genesis.launch.py
 
 Requirements:
-    pip install genesis-world
+    pip install genesis-world torch
     pip install rclpy (via ROS2 Humble)
 """
 from __future__ import annotations
 
+import argparse
 import math
 import time
 import threading
@@ -44,6 +51,12 @@ PREDICTION_STEPS  = 20
 
 # ── Genesis ───────────────────────────────────────────────────────────────
 import genesis as gs
+
+# ── RL Policy ─────────────────────────────────────────────────────────────
+from genesis_sim.policy import (
+    G1LocomotionPolicy, POLICY_JOINT_NAMES, DEFAULT_JOINT_POS,
+    NUM_POLICY_JOINTS,
+)
 
 import os
 URDF_PATH = os.path.join(
@@ -318,8 +331,14 @@ class HumanActor:
         self._entity.set_pos(self.pos)
 
 
-def build_scene(node: GenesisNode):
+def build_scene(node: GenesisNode, policy_path: str | None = None):
     """Build and run the Genesis scene."""
+
+    # ── RL Policy ─────────────────────────────────────────────────────────
+    policy = G1LocomotionPolicy(checkpoint_path=policy_path)
+    use_rl = policy_path is not None
+    mode = "RL walking" if use_rl else "kinematic floating"
+    node.get_logger().info(f"Locomotion mode: {mode}")
 
     gs.init(backend=gs.cpu, logging_level="warning")
 
@@ -338,32 +357,28 @@ def build_scene(node: GenesisNode):
         (( 5, 0, 1), (0.2, 10, 2)),
         ((-5, 0, 1), (0.2, 10, 2)),
     ]:
-        scene.add_entity(
-            gs.morphs.Box(size=size),
-            pos=pos,
-        )
+        scene.add_entity(gs.morphs.Box(size=size), pos=pos)
 
-    # G1 robot — floating base (gravity disabled via zero gravity + velocity control)
+    # G1 robot
     robot = scene.add_entity(
         gs.morphs.URDF(
             file=os.path.abspath(URDF_PATH),
             fixed=False,
-            merge_fixed_links=True,
+            merge_fixed_links=False,   # keep all joints for RL control
         ),
-        pos=(0, 0, 0.8),
+        pos=(0, 0, 0.85),
     )
 
-    # RGB-D camera at d435_link position relative to torso
-    # d435_joint origin: xyz="0.0576235 0.01753 0.41987" rpy="0 0.831 0"
+    # Camera at d435_link (xyz="0.0576235 0.01753 0.41987" from torso_link)
     camera = scene.add_camera(
         res=(CAM_W, CAM_H),
-        pos=(0.06, 0.02, 1.22),   # approx world position when robot at z=0.8
+        pos=(0.06, 0.02, 1.22),
         lookat=(1.0, 0.0, 0.8),
         fov=CAM_FOV_DEG,
         GUI=False,
     )
 
-    # Human actors — patrol paths across the room
+    # Human actors
     humans = [
         HumanActor(scene, waypoints=[(2, -3, 0), (2, 3, 0)], speed=0.7),
         HumanActor(scene, waypoints=[(-2, 3, 0), (3, -1, 0)], speed=0.5),
@@ -371,48 +386,107 @@ def build_scene(node: GenesisNode):
 
     scene.build()
 
-    node.get_logger().info("Genesis scene built. Starting simulation loop.")
+    # Get joint indices for policy-controlled joints
+    if use_rl:
+        policy_joint_indices = []
+        for name in POLICY_JOINT_NAMES:
+            try:
+                idx = robot.get_joint(name).dof_idx_local
+                policy_joint_indices.append(idx)
+            except Exception:
+                node.get_logger().warn(f"Joint not found: {name}")
+        policy_joint_indices = np.array(policy_joint_indices, dtype=int)
+
+        # Initialise joints to default standing pose
+        init_pos = np.zeros(robot.n_dofs)
+        init_pos[policy_joint_indices] = DEFAULT_JOINT_POS
+        robot.set_dofs_position(init_pos)
+
+    node.get_logger().info(f"Genesis scene built. Starting {mode} loop.")
 
     # ── Timing ────────────────────────────────────────────────────────────
-    cam_interval  = 1.0 / node.PUB_HZ
-    imu_interval  = 1.0 / node.IMU_HZ
-    odom_interval = 1.0 / node.ODOM_HZ
+    cam_interval   = 1.0 / node.PUB_HZ
+    imu_interval   = 1.0 / node.IMU_HZ
+    odom_interval  = 1.0 / node.ODOM_HZ
+    policy_interval = policy._policy_dt if use_rl else 9999
 
-    last_cam  = 0.0
-    last_imu  = 0.0
-    last_odom = 0.0
+    last_cam    = 0.0
+    last_imu    = 0.0
+    last_odom   = 0.0
+    last_policy = 0.0
 
-    sim_time = 0.0
+    sim_time  = 0.0
     robot_yaw = 0.0
     robot_x, robot_y = 0.0, 0.0
-
-    prev_lin_vel = np.zeros(3)
 
     # ── Main simulation loop ──────────────────────────────────────────────
     while rclpy.ok():
         t_start = time.perf_counter()
-
-        # Get velocity command from ROS2
+        dt = node.SIM_DT
         vx, vy, wz = node.get_cmd_vel()
 
-        # Update robot pose (kinematic floating base — no fall)
-        dt = node.SIM_DT
-        robot_yaw += wz * dt
-        robot_x   += (vx * math.cos(robot_yaw) - vy * math.sin(robot_yaw)) * dt
-        robot_y   += (vx * math.sin(robot_yaw) + vy * math.cos(robot_yaw)) * dt
+        if use_rl:
+            # ── RL POLICY MODE ─────────────────────────────────────────
+            # Run policy at 50Hz, physics at 100Hz
+            if sim_time - last_policy >= policy_interval:
+                last_policy = sim_time
 
-        cy, sy = math.cos(robot_yaw), math.sin(robot_yaw)
+                # Read joint state from Genesis
+                all_pos = robot.get_dofs_position().cpu().numpy()
+                all_vel = robot.get_dofs_velocity().cpu().numpy()
+                joint_pos = all_pos[policy_joint_indices]
+                joint_vel = all_vel[policy_joint_indices]
 
-        # Move robot in Genesis
-        robot.set_pos((robot_x, robot_y, 0.8))
-        robot.set_quat((0.0, 0.0, sy * 0.7071, cy * 0.7071))  # approx yaw quat
+                # Read base state
+                base_quat = robot.get_quat().cpu().numpy()   # (w, x, y, z)
+                base_ang_vel = robot.get_ang_vel().cpu().numpy()
+
+                # Gravity vector in base frame
+                gravity_world = np.array([0, 0, -1], dtype=np.float32)
+                w, x, y, z = base_quat
+                # Rotate gravity to base frame using quaternion conjugate
+                gravity_base = _rotate_vec_by_quat_inv(gravity_world, np.array([w, x, y, z]))
+
+                # Command from Nav2
+                command = np.array([vx, vy, wz], dtype=np.float32)
+
+                # Run policy
+                target_pos = policy.step(
+                    ang_vel_base=base_ang_vel.astype(np.float32),
+                    gravity_vec_base=gravity_base,
+                    command=command,
+                    joint_pos=joint_pos.astype(np.float32),
+                    joint_vel=joint_vel.astype(np.float32),
+                )
+
+                # Apply as position targets via PD control
+                torques = policy.compute_torques(target_pos, joint_pos, joint_vel)
+                full_torques = np.zeros(robot.n_dofs)
+                full_torques[policy_joint_indices] = torques
+                robot.set_dofs_force(full_torques)
+
+            # Read back actual robot base position for odom/camera
+            base_pos = robot.get_pos().cpu().numpy()
+            base_quat = robot.get_quat().cpu().numpy()
+            robot_x, robot_y = float(base_pos[0]), float(base_pos[1])
+            robot_yaw = _quat_to_yaw(base_quat)
+            cy, sy = math.cos(robot_yaw), math.sin(robot_yaw)
+
+        else:
+            # ── KINEMATIC MODE (no policy) ─────────────────────────────
+            robot_yaw += wz * dt
+            robot_x   += (vx * math.cos(robot_yaw) - vy * math.sin(robot_yaw)) * dt
+            robot_y   += (vx * math.sin(robot_yaw) + vy * math.cos(robot_yaw)) * dt
+            cy, sy = math.cos(robot_yaw), math.sin(robot_yaw)
+            robot.set_pos((robot_x, robot_y, 0.85))
+            robot.set_quat((0.0, 0.0, sy * 0.7071, cy * 0.7071))
 
         # Move camera to follow robot
         cam_x = robot_x + 0.06 * cy
         cam_y = robot_y + 0.06 * sy
         camera.set_pose(
-            pos=(cam_x, cam_y, 0.8 + 0.42),
-            lookat=(cam_x + cy, cam_y + sy, 0.8 + 0.42),
+            pos=(cam_x, cam_y, 0.85 + 0.42),
+            lookat=(cam_x + cy, cam_y + sy, 0.85 + 0.42),
         )
 
         # Step humans
@@ -460,12 +534,50 @@ def build_scene(node: GenesisNode):
             time.sleep(sleep_t)
 
 
+def _quat_to_yaw(quat: np.ndarray) -> float:
+    """Extract yaw from quaternion (w, x, y, z)."""
+    w, x, y, z = quat
+    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def _rotate_vec_by_quat_inv(vec: np.ndarray, quat: np.ndarray) -> np.ndarray:
+    """Rotate vector by inverse of quaternion (w, x, y, z) — world to base frame."""
+    w, x, y, z = quat
+    # Conjugate (inverse for unit quat)
+    qc = np.array([w, -x, -y, -z])
+    return _quat_rotate(vec, qc)
+
+
+def _quat_rotate(vec: np.ndarray, quat: np.ndarray) -> np.ndarray:
+    """Rotate 3D vector by quaternion (w, x, y, z)."""
+    w, x, y, z = quat
+    R = np.array([
+        [1-2*(y*y+z*z),   2*(x*y-z*w),   2*(x*z+y*w)],
+        [  2*(x*y+z*w), 1-2*(x*x+z*z),   2*(y*z-x*w)],
+        [  2*(x*z-y*w),   2*(y*z+x*w), 1-2*(x*x+y*y)],
+    ], dtype=np.float64)
+    return (R @ vec).astype(np.float32)
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Genesis G1 simulation bridge")
+    parser.add_argument(
+        "--policy", type=str, default=None,
+        help="Path to RL policy checkpoint (.pt). "
+             "Download from https://github.com/unitreerobotics/unitree_rl_gym"
+    )
+    args, _ = parser.parse_known_args()
+
     rclpy.init()
     node = GenesisNode()
 
+    if args.policy:
+        node.get_logger().info(f"Loading RL policy: {args.policy}")
+    else:
+        node.get_logger().info("No policy provided — using kinematic floating mode.")
+
     try:
-        build_scene(node)
+        build_scene(node, policy_path=args.policy)
     except KeyboardInterrupt:
         node.get_logger().info("Genesis simulation stopped.")
     finally:
