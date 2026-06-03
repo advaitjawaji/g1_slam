@@ -92,22 +92,10 @@ def generate_launch_description():
     )
 
     # ── Human detection ───────────────────────────────────────────────────
-    detection = TimerAction(
-        period=6.0,
-        actions=[Node(
-            package="g1_detection",
-            executable="detection_node",
-            name="detection_node",
-            output="screen",
-            parameters=[{
-                "model_path":   model_path,
-                "conf":         0.25,
-                "imgsz":        384,
-                "camera_frame": "d435_link",
-                "map_frame":    "map",
-            }],
-        )],
-    )
+    # NOTE: detection_node (YOLO) is NOT launched in Genesis mode.
+    # genesis_node.py publishes ground truth /humans/markers directly,
+    # bypassing YOLO since Genesis human actors are simple cylinders.
+    # human_obstacle_node still runs to inject those positions into Nav2.
 
     human_obstacle = TimerAction(
         period=6.0,

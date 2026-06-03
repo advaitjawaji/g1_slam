@@ -27,11 +27,20 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
 from sensor_msgs.msg import Image, CameraInfo, Imu
-from geometry_msgs.msg import Twist, TransformStamped, Vector3
+from geometry_msgs.msg import Twist, TransformStamped, Vector3, Point
+from visualization_msgs.msg import Marker, MarkerArray
 from nav_msgs.msg import Odometry
 from tf2_ros import TransformBroadcaster
+
+# Avoidance thresholds — must match detection_node params
+FRONT_STOP_M      = 1.8
+FRONT_SLOW_M      = 3.8
+SIDE_STOP_M       = 0.8
+FRONT_HALF_WIDTH  = 0.7   # lateral corridor considered "front"
+PREDICTION_SECS   = 1.5
+PREDICTION_STEPS  = 20
 
 # ── Genesis ───────────────────────────────────────────────────────────────
 import genesis as gs
@@ -77,12 +86,14 @@ class GenesisNode(Node):
         self._robot_yaw = 0.0
 
         # Publishers
-        self._rgb_pub   = self.create_publisher(Image,      "/camera/color/image_raw",                  QOS_SENSOR)
-        self._depth_pub = self.create_publisher(Image,      "/camera/aligned_depth_to_color/image_raw", QOS_SENSOR)
-        self._info_pub  = self.create_publisher(CameraInfo, "/camera/color/camera_info",                QOS_SENSOR)
-        self._imu_pub   = self.create_publisher(Imu,        "/imu_in_torso/data",                       QOS_SENSOR)
-        self._odom_pub  = self.create_publisher(Odometry,   "/odom/raw",                                10)
-        self._tf_br     = TransformBroadcaster(self)
+        self._rgb_pub      = self.create_publisher(Image,       "/camera/color/image_raw",                  QOS_SENSOR)
+        self._depth_pub    = self.create_publisher(Image,       "/camera/aligned_depth_to_color/image_raw", QOS_SENSOR)
+        self._info_pub     = self.create_publisher(CameraInfo,  "/camera/color/camera_info",                QOS_SENSOR)
+        self._imu_pub      = self.create_publisher(Imu,         "/imu_in_torso/data",                       QOS_SENSOR)
+        self._odom_pub     = self.create_publisher(Odometry,    "/odom/raw",                                10)
+        self._markers_pub  = self.create_publisher(MarkerArray, "/humans/markers",                          10)
+        self._human_cmd_pub= self.create_publisher(String,      "/g1/human_cmd",                            10)
+        self._tf_br        = TransformBroadcaster(self)
 
         # cmd_vel subscriber
         self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_cb, 10)
@@ -179,6 +190,97 @@ class GenesisNode(Node):
         tf.transform.rotation.z = sy
         self._tf_br.sendTransform(tf)
 
+    def publish_ground_truth_humans(
+        self,
+        humans: list,
+        robot_x: float,
+        robot_y: float,
+        robot_yaw: float,
+    ):
+        """
+        Bypass YOLO — publish known human positions directly as /humans/markers
+        and compute /g1/human_cmd from distance thresholds.
+        Same message format as detection_node so human_obstacle_node and
+        robot_node work unchanged.
+        """
+        marker_array = MarkerArray()
+        worst_cmd = "NORMAL_OPERATION"
+
+        for i, human in enumerate(humans):
+            hx, hy = float(human.pos[0]), float(human.pos[1])
+            vx, vy = float(human.vel[0]), float(human.vel[1])
+
+            # ── Current position marker (cylinder) ────────────────────
+            m = Marker()
+            m.header.frame_id = "map"
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = "humans"
+            m.id = i
+            m.type = Marker.CYLINDER
+            m.action = Marker.ADD
+            m.pose.position.x = hx
+            m.pose.position.y = hy
+            m.pose.position.z = 0.9
+            m.pose.orientation.w = 1.0
+            m.scale.x = 0.5
+            m.scale.y = 0.5
+            m.scale.z = 1.8
+            m.color.r = 1.0
+            m.color.a = 0.8
+            m.lifetime.sec = 1
+            marker_array.markers.append(m)
+
+            # ── Predicted trajectory (linear projection) ───────────────
+            speed = math.hypot(vx, vy)
+            if speed > 0.05:
+                pred_marker = Marker()
+                pred_marker.header.frame_id = "map"
+                pred_marker.header.stamp = m.header.stamp
+                pred_marker.ns = "human_predictions"
+                pred_marker.id = i + 1000
+                pred_marker.type = Marker.LINE_STRIP
+                pred_marker.action = Marker.ADD
+                pred_marker.scale.x = 0.05
+                pred_marker.color.g = 1.0
+                pred_marker.color.a = 0.8
+                pred_marker.lifetime.sec = 1
+
+                dt = PREDICTION_SECS / PREDICTION_STEPS
+                px, py = hx, hy
+                for _ in range(PREDICTION_STEPS):
+                    px += vx * dt
+                    py += vy * dt
+                    pt = Point()
+                    pt.x, pt.y, pt.z = px, py, 0.0
+                    pred_marker.points.append(pt)
+                marker_array.markers.append(pred_marker)
+
+            # ── Compute avoidance command ──────────────────────────────
+            # Transform human pos into robot frame
+            dx = hx - robot_x
+            dy = hy - robot_y
+            # Rotate to robot frame
+            rel_fwd  =  dx * math.cos(robot_yaw) + dy * math.sin(robot_yaw)
+            rel_side = -dx * math.sin(robot_yaw) + dy * math.cos(robot_yaw)
+            dist = math.hypot(rel_fwd, rel_side)
+
+            in_front = rel_fwd >= 0 and abs(rel_side) <= FRONT_HALF_WIDTH
+
+            if in_front:
+                if dist < FRONT_STOP_M:
+                    worst_cmd = "STOP"
+                elif dist < FRONT_SLOW_M and worst_cmd != "STOP":
+                    worst_cmd = "SLOW_DOWN"
+            else:
+                if dist < SIDE_STOP_M:
+                    worst_cmd = "STOP"
+
+        self._markers_pub.publish(marker_array)
+
+        cmd_msg = String()
+        cmd_msg.data = worst_cmd
+        self._human_cmd_pub.publish(cmd_msg)
+
     def _header(self, frame_id: str) -> Header:
         h = Header()
         h.stamp = self.get_clock().now().to_msg()
@@ -193,9 +295,9 @@ class HumanActor:
         self._waypoints = waypoints
         self._speed = speed
         self._idx = 0
-        self._pos = np.array(waypoints[0], dtype=float)
+        self.pos = np.array(waypoints[0], dtype=float)
+        self.vel = np.zeros(3, dtype=float)   # exposed for ground truth publishing
 
-        # Load simple capsule as human placeholder
         self._entity = scene.add_entity(
             gs.morphs.Cylinder(radius=0.2, height=1.8),
             surface=gs.surfaces.Default(color=(0.8, 0.3, 0.3, 1.0)),
@@ -203,15 +305,17 @@ class HumanActor:
 
     def step(self, dt: float):
         target = np.array(self._waypoints[self._idx], dtype=float)
-        direction = target - self._pos
+        direction = target - self.pos
         dist = np.linalg.norm(direction)
 
         if dist < 0.1:
             self._idx = (self._idx + 1) % len(self._waypoints)
+            self.vel = np.zeros(3)
         else:
-            self._pos += (direction / dist) * self._speed * dt
+            self.vel = (direction / dist) * self._speed
+            self.pos += self.vel * dt
 
-        self._entity.set_pos(self._pos)
+        self._entity.set_pos(self.pos)
 
 
 def build_scene(node: GenesisNode):
@@ -338,6 +442,13 @@ def build_scene(node: GenesisNode):
         if sim_time - last_odom >= odom_interval:
             last_odom = sim_time
             node.publish_odom(robot_x, robot_y, robot_yaw, vx, vy, wz)
+
+        # ── Ground truth human positions (bypasses YOLO) ───────────────
+        # Publishes /humans/markers and /g1/human_cmd at camera rate
+        if sim_time - last_cam >= cam_interval:
+            node.publish_ground_truth_humans(
+                humans, robot_x, robot_y, robot_yaw
+            )
 
         # ── Spin ROS2 once ─────────────────────────────────────────────
         rclpy.spin_once(node, timeout_sec=0.0)
