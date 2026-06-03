@@ -377,11 +377,25 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
         ),
     )
 
-    # Camera at d435_link (xyz="0.0576235 0.01753 0.41987" from torso_link)
+    # D435 mount from URDF: xyz="0.0576235 0.01753 0.41987" on torso_link
+    # torso_link world z = pelvis(0.793) + waist_roll(0.035) + torso(0.019) = 0.847
+    # d435 world z = 0.847 + 0.41987 = 1.267
+    # pitch = 0.831 rad (~47.6°) downward — camera looks forward and down
+    D435_WORLD_X  =  0.0576
+    D435_WORLD_Y  =  0.0175
+    D435_WORLD_Z  =  1.267
+    D435_PITCH    =  0.831   # rad downward
+
+    # Compute lookat point from pitch: camera looks along pitched-forward direction
+    import math as _math
+    _look_dist = 2.0
+    _look_x = D435_WORLD_X + _look_dist * _math.cos(D435_PITCH)
+    _look_z = D435_WORLD_Z - _look_dist * _math.sin(D435_PITCH)
+
     camera = scene.add_camera(
         res=(cam_w, cam_h),
-        pos=(0.06, 0.02, 1.22),
-        lookat=(1.0, 0.0, 0.8),
+        pos=(D435_WORLD_X, D435_WORLD_Y, D435_WORLD_Z),
+        lookat=(_look_x, D435_WORLD_Y, _look_z),
         fov=CAM_FOV_DEG,
         GUI=False,
     )
@@ -491,13 +505,15 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
             robot.set_pos((robot_x, robot_y, 0.85))
             robot.set_quat((qw, 0.0, 0.0, qz))
 
-        # Move camera to follow robot
-        cam_x = robot_x + 0.06 * cy
-        cam_y = robot_y + 0.06 * sy
-        camera.set_pose(
-            pos=(cam_x, cam_y, 0.85 + 0.42),
-            lookat=(cam_x + cy, cam_y + sy, 0.85 + 0.42),
-        )
+        # Move camera to follow robot — exact D435 offset from torso
+        # d435_joint xyz="0.0576235 0.01753 0.41987" on torso_link, pitch=0.831 rad
+        cam_x = robot_x + D435_WORLD_X * cy - D435_WORLD_Y * sy
+        cam_y = robot_y + D435_WORLD_X * sy + D435_WORLD_Y * cy
+        cam_z = D435_WORLD_Z  # stays constant in kinematic mode
+        look_x = cam_x + _look_dist * math.cos(D435_PITCH) * cy
+        look_y = cam_y + _look_dist * math.cos(D435_PITCH) * sy
+        look_z = cam_z - _look_dist * math.sin(D435_PITCH)
+        camera.set_pose(pos=(cam_x, cam_y, cam_z), lookat=(look_x, look_y, look_z))
 
         # Step humans
         for h in humans:
