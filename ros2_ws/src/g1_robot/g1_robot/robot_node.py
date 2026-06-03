@@ -8,6 +8,8 @@ from g1_robot.robot_interface import RobotConfig, RobotCommand, RobotMode
 
 
 class RobotNode(Node):
+    SLOW_SCALE = 0.4  # reduce to 40% speed when human nearby
+
     def __init__(self):
         super().__init__("robot_node")
 
@@ -20,39 +22,68 @@ class RobotNode(Node):
         )
 
         self._robot = G1Robot()
-        self._robot.setup(config)
+        ok = self._robot.setup(config)
+        if not ok:
+            self.get_logger().error("G1 setup failed — check IP and SDK.")
 
-        # Human detection commands (STOP / NORMAL_OPERATION)
+        # Human detection override state
+        self._human_override = False   # True = hard stop
+        self._vel_scale = 1.0          # 1.0 = normal, 0.4 = slow
+
+        # Human detection commands from detection node
         self.create_subscription(String, "/g1/human_cmd", self._human_cmd_cb, 10)
 
-        # Nav2 velocity commands
+        # Velocity commands from Nav2
         self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_cb, 10)
 
-        self._human_override = False
         self.get_logger().info("Robot node ready.")
 
     def _human_cmd_cb(self, msg: String):
-        if msg.data == "STOP":
+        cmd = msg.data.upper()
+
+        if cmd == "STOP":
+            if not self._human_override:
+                self.get_logger().warn("Human too close — STOP")
             self._human_override = True
-            self._robot.send_command(RobotCommand(mode=RobotMode.STOP))
-        elif msg.data == "NORMAL_OPERATION":
+            self._vel_scale = 0.0
+            self._robot.stop()
+
+        elif cmd == "SLOW_DOWN":
             self._human_override = False
+            self._vel_scale = self.SLOW_SCALE
+            self.get_logger().info("Human nearby — SLOW DOWN")
+
+        elif cmd == "NORMAL_OPERATION":
+            if self._human_override or self._vel_scale < 1.0:
+                self.get_logger().info("Path clear — NORMAL OPERATION")
+            self._human_override = False
+            self._vel_scale = 1.0
 
     def _cmd_vel_cb(self, msg: Twist):
         if self._human_override:
-            return
+            return  # safety override — don't move
+
+        scale = self._vel_scale
         cmd = RobotCommand(
             mode=RobotMode.WALK,
-            vx=msg.linear.x,
-            vy=msg.linear.y,
-            wz=msg.angular.z,
+            vx=msg.linear.x  * scale,
+            vy=msg.linear.y  * scale,
+            wz=msg.angular.z * scale,
         )
         self._robot.send_command(cmd)
+
+    def destroy_node(self):
+        self._robot.shutdown()
+        super().destroy_node()
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = RobotNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
