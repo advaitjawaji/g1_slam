@@ -53,7 +53,9 @@ PREDICTION_STEPS  = 20
 import genesis as gs
 
 # ── RL Policy ─────────────────────────────────────────────────────────────
-from genesis_sim.policy import (
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from policy import (
     G1LocomotionPolicy, POLICY_JOINT_NAMES, DEFAULT_JOINT_POS,
     NUM_POLICY_JOINTS,
 )
