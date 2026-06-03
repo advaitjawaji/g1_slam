@@ -2,7 +2,7 @@
 Full hardware bringup for Unitree G1 autonomous human avoidance demo.
 
 Components launched:
-  1. RealSense D435i camera
+  1. Camera (RealSense D435i or ZED 2i)
   2. Robot state publisher (G1 URDF)
   3. RTAB-Map SLAM
   4. Human detection + obstacle injection
@@ -11,10 +11,15 @@ Components launched:
   7. RViz (optional)
 
 Usage:
+    # RealSense (default)
     ros2 launch g1_bringup hardware.launch.py robot_ip:=192.168.123.161
+
+    # ZED 2i
+    ros2 launch g1_bringup hardware.launch.py robot_ip:=192.168.123.161 camera:=zed
 
 Arguments:
     robot_ip    — G1 IP address (default: 192.168.123.161)
+    camera      — Camera type: 'realsense' or 'zed' (default: realsense)
     model_path  — YOLO model file (default: yolo11n.pt, use yolo26n.engine on Jetson)
     rviz        — Launch RViz visualizer (default: true)
     slam_mode   — 'mapping' builds new map, 'localization' uses existing (default: mapping)
@@ -26,7 +31,7 @@ from launch.actions import (
     DeclareLaunchArgument, IncludeLaunchDescription,
     TimerAction, GroupAction
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
@@ -35,9 +40,13 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     robot_ip   = LaunchConfiguration("robot_ip",   default="192.168.123.161")
+    camera     = LaunchConfiguration("camera",     default="realsense")
     model_path = LaunchConfiguration("model_path", default="yolo11n.pt")
     rviz       = LaunchConfiguration("rviz",       default="true")
     slam_mode  = LaunchConfiguration("slam_mode",  default="mapping")
+
+    use_zed        = PythonExpression(["'", camera, "' == 'zed'"])
+    use_realsense  = PythonExpression(["'", camera, "' != 'zed'"])
 
     pkg_desc    = get_package_share_directory("g1_description")
     pkg_bringup = get_package_share_directory("g1_bringup")
@@ -56,22 +65,60 @@ def generate_launch_description():
         parameters=[{"robot_description": robot_description, "use_sim_time": False}],
     )
 
-    # ── 2. RealSense D435i ───────────────────────────────────────────────
+    # ── 2a. RealSense D435i ───────────────────────────────────────────────
     realsense = Node(
         package="realsense2_camera",
         executable="realsense2_camera_node",
         name="camera",
         namespace="camera",
         parameters=[{
-            "enable_color":              True,
-            "enable_depth":              True,
-            "enable_gyro":               True,
-            "enable_accel":              True,
-            "unite_imu_method":          "linear_interpolation",
-            "align_depth.enable":        True,
+            "enable_color":               True,
+            "enable_depth":               True,
+            "enable_gyro":                True,
+            "enable_accel":               True,
+            "unite_imu_method":           "linear_interpolation",
+            "align_depth.enable":         True,
             "depth_module.depth_profile": "640x480x30",
             "rgb_camera.color_profile":   "640x480x30",
         }],
+        condition=IfCondition(use_realsense),
+    )
+
+    # ── 2b. ZED 2i ───────────────────────────────────────────────────────
+    # ZED ROS2 wrapper publishes to /zed/zed_node/* — we remap to our
+    # standard /camera/* topics so SLAM and detection work unchanged.
+    # Install: https://github.com/stereolabs/zed-ros2-wrapper
+    zed = Node(
+        package="zed_wrapper",
+        executable="zed_wrapper",
+        name="zed_node",
+        namespace="zed",
+        parameters=[{
+            "general.camera_model":        "zed2",
+            "general.grab_resolution":     "HD720",
+            "general.grab_frame_rate":     30,
+            "depth.depth_mode":            "ULTRA",
+            "sensors.publish_imu_tf":      False,
+        }],
+        remappings=[
+            ("zed_node/rgb/image_rect_color",        "/camera/color/image_raw"),
+            ("zed_node/rgb/camera_info",             "/camera/color/camera_info"),
+            ("zed_node/depth/depth_registered",      "/camera/aligned_depth_to_color/image_raw"),
+            ("zed_node/point_cloud/cloud_registered", "/camera/depth/points"),
+            ("zed_node/imu/data",                    "/imu_in_torso/data"),
+        ],
+        condition=IfCondition(use_zed),
+    )
+
+    # ZED camera frame → d435_link static TF (so SLAM uses our URDF frame)
+    # Adjust xyz/rpy to match physical ZED mount position on G1
+    zed_tf = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="zed_to_d435_tf",
+        arguments=["0", "0", "0", "0", "0", "0",
+                   "zed_left_camera_frame", "d435_link"],
+        condition=IfCondition(use_zed),
     )
 
     # ── 3. RTAB-Map SLAM ─────────────────────────────────────────────────
@@ -165,6 +212,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("robot_ip",   default_value="192.168.123.161",
                               description="G1 robot IP address"),
+        DeclareLaunchArgument("camera",     default_value="realsense",
+                              description="Camera type: 'realsense' or 'zed'"),
         DeclareLaunchArgument("model_path", default_value="yolo11n.pt",
                               description="YOLO model path (use yolo26n.engine on Jetson)"),
         DeclareLaunchArgument("rviz",       default_value="true",
@@ -174,6 +223,8 @@ def generate_launch_description():
 
         robot_state_publisher,
         realsense,
+        zed,
+        zed_tf,
         slam,
         detection,
         human_obstacle,
