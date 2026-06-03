@@ -62,10 +62,7 @@ from policy import (
 )
 
 import os
-URDF_PATH = os.path.join(
-    os.path.dirname(__file__), "..",
-    "ros2_ws/src/g1_description/urdf/g1_29dof.urdf"
-)
+MJCF_PATH = os.path.join(os.path.dirname(__file__), "g1_29dof.xml")
 
 QOS_SENSOR = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -372,13 +369,11 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
     ]:
         scene.add_entity(gs.morphs.Box(size=size, pos=wpos))
 
-    # G1 robot
+    # G1 robot — load from MuJoCo XML (better contact geometry + physics)
     robot = scene.add_entity(
-        gs.morphs.URDF(
-            file=os.path.abspath(URDF_PATH),
-            fixed=False,
-            merge_fixed_links=False,
-            pos=(0, 0, 0.85),
+        gs.morphs.MJCF(
+            file=os.path.abspath(MJCF_PATH),
+            pos=(0, 0, 0),   # MuJoCo file sets pelvis at z=0.793 internally
         ),
     )
 

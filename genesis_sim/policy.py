@@ -28,45 +28,48 @@ except ImportError:
 
 # ── Joint ordering (matches unitree_rl_gym G1 locomotion policy) ──────────
 # Policy controls LEGS + WAIST only. Arms held at default.
+# Joint names match MuJoCo actuator order in g1_29dof.xml
+# Locomotion policy controls legs + waist (15 joints)
 POLICY_JOINT_NAMES = [
-    "left_hip_pitch_link",
-    "left_hip_roll_link",
-    "left_hip_yaw_link",
-    "left_knee_link",
-    "left_ankle_pitch_link",
-    "left_ankle_roll_link",
-    "right_hip_pitch_link",
-    "right_hip_roll_link",
-    "right_hip_yaw_link",
-    "right_knee_link",
-    "right_ankle_pitch_link",
-    "right_ankle_roll_link",
-    "waist_yaw_link",
-    "waist_roll_link",
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",       # present in MuJoCo model, absent from URDF version
 ]
-NUM_POLICY_JOINTS = len(POLICY_JOINT_NAMES)  # 14
+NUM_POLICY_JOINTS = len(POLICY_JOINT_NAMES)  # 15
 
-# Default standing joint angles (radians) — tuned for G1
+# Default standing joint angles (radians)
 DEFAULT_JOINT_POS = np.array([
     # left leg: hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll
     -0.10, 0.0, 0.0, 0.30, -0.20, 0.0,
     # right leg
     -0.10, 0.0, 0.0, 0.30, -0.20, 0.0,
-    # waist: yaw, roll
-    0.0, 0.0,
+    # waist: yaw, roll, pitch
+    0.0, 0.0, 0.0,
 ], dtype=np.float32)
 
 # PD gains matching Unitree hardware
 KP = np.array([
     100, 80, 60, 150, 40, 40,   # left leg
     100, 80, 60, 150, 40, 40,   # right leg
-    200, 80,                     # waist
+    200, 80, 80,                 # waist yaw, roll, pitch
 ], dtype=np.float32)
 
 KD = np.array([
     5, 4, 3, 6, 2, 2,   # left leg
     5, 4, 3, 6, 2, 2,   # right leg
-    8, 4,                # waist
+    8, 4, 4,             # waist yaw, roll, pitch
 ], dtype=np.float32)
 
 # Observation scaling (matches unitree_rl_gym normalization)
@@ -90,7 +93,7 @@ class G1LocomotionPolicy:
         self._device = device
         self._policy_net = None
         self._action_dim = NUM_POLICY_JOINTS
-        self._obs_dim = 3 + 3 + 3 + NUM_POLICY_JOINTS * 3 + 4  # = 51
+        self._obs_dim = 3 + 3 + 3 + NUM_POLICY_JOINTS * 3 + 4  # = 53 (15 joints)
 
         self._prev_actions = np.zeros(NUM_POLICY_JOINTS, dtype=np.float32)
         self._gait_phase = 0.0
