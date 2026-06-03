@@ -315,8 +315,7 @@ class HumanActor:
         self.vel = np.zeros(3, dtype=float)   # exposed for ground truth publishing
 
         self._entity = scene.add_entity(
-            gs.morphs.Cylinder(radius=0.2, height=1.8),
-            surface=gs.surfaces.Default(color=(0.8, 0.3, 0.3, 1.0)),
+            gs.morphs.Cylinder(radius=0.2, height=1.8, pos=waypoints[0]),
         )
 
     def step(self, dt: float):
@@ -354,22 +353,22 @@ def build_scene(node: GenesisNode, policy_path: str | None = None):
     scene.add_entity(gs.morphs.Plane())
 
     # Walls (matching test_room.world — 10x10m room)
-    for pos, size in [
+    for wpos, size in [
         ((0,  5, 1), (10, 0.2, 2)),
         ((0, -5, 1), (10, 0.2, 2)),
         (( 5, 0, 1), (0.2, 10, 2)),
         ((-5, 0, 1), (0.2, 10, 2)),
     ]:
-        scene.add_entity(gs.morphs.Box(size=size), pos=pos)
+        scene.add_entity(gs.morphs.Box(size=size, pos=wpos))
 
     # G1 robot
     robot = scene.add_entity(
         gs.morphs.URDF(
             file=os.path.abspath(URDF_PATH),
             fixed=False,
-            merge_fixed_links=False,   # keep all joints for RL control
+            merge_fixed_links=False,
+            pos=(0, 0, 0.85),
         ),
-        pos=(0, 0, 0.85),
     )
 
     # Camera at d435_link (xyz="0.0576235 0.01753 0.41987" from torso_link)
