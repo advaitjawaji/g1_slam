@@ -492,18 +492,19 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
             base_quat = robot.get_quat().cpu().numpy()
             robot_x, robot_y = float(base_pos[0]), float(base_pos[1])
             robot_yaw = _quat_to_yaw(base_quat)
-            cy, sy = math.cos(robot_yaw), math.sin(robot_yaw)
 
         else:
             # ── KINEMATIC MODE (no policy) ─────────────────────────────
             robot_yaw += wz * dt
             robot_x   += (vx * math.cos(robot_yaw) - vy * math.sin(robot_yaw)) * dt
             robot_y   += (vx * math.sin(robot_yaw) + vy * math.cos(robot_yaw)) * dt
-            # Genesis quaternion format: (w, x, y, z) — yaw rotation around Z axis
             qw = math.cos(robot_yaw / 2)
             qz = math.sin(robot_yaw / 2)
             robot.set_pos((robot_x, robot_y, 0.85))
             robot.set_quat((qw, 0.0, 0.0, qz))
+
+        # cy/sy always available after both branches
+        cy, sy = math.cos(robot_yaw), math.sin(robot_yaw)
 
         # Move camera to follow robot — exact D435 offset from torso
         # d435_joint xyz="0.0576235 0.01753 0.41987" on torso_link, pitch=0.831 rad
