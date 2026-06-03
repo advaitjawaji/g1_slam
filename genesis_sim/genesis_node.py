@@ -83,9 +83,9 @@ CAM_FOV_DEG = 2 * math.degrees(math.atan2(CAM_W / 2, CAM_FX))  # ~86 deg
 
 
 class GenesisNode(Node):
-    SIM_DT   = 0.01    # Genesis timestep (100 Hz physics)
-    PUB_HZ   = 30      # camera publish rate
-    IMU_HZ   = 200     # IMU publish rate
+    SIM_DT   = 0.02    # Genesis timestep (50 Hz physics — easier to keep up with)
+    PUB_HZ   = 10      # camera publish rate (lower = less stutter)
+    IMU_HZ   = 50      # IMU publish rate
     ODOM_HZ  = 50      # odometry publish rate
 
     def __init__(self):
@@ -514,10 +514,8 @@ def build_scene(node: GenesisNode, policy_path: str | None = None):
             ang_vel = np.array([0.0, 0.0, wz])
             node.publish_imu(lin_acc, ang_vel)
 
-        # ── Odometry publish ───────────────────────────────────────────
-        if sim_time - last_odom >= odom_interval:
-            last_odom = sim_time
-            node.publish_odom(robot_x, robot_y, robot_yaw, vx, vy, wz)
+        # ── Odometry + TF — publish every step for smooth RViz ────────
+        node.publish_odom(robot_x, robot_y, robot_yaw, vx, vy, wz)
 
         # ── Ground truth human positions (bypasses YOLO) ───────────────
         # Publishes /humans/markers and /g1/human_cmd at camera rate
