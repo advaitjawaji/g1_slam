@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
+import sys
 import time
 import threading
 import numpy as np
@@ -53,7 +55,6 @@ PREDICTION_STEPS  = 20
 import genesis as gs
 
 # ── RL Policy ─────────────────────────────────────────────────────────────
-import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from policy import (
     G1LocomotionPolicy, POLICY_JOINT_NAMES, DEFAULT_JOINT_POS,
