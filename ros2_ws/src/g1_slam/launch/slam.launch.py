@@ -39,7 +39,7 @@ def generate_launch_description():
             ("rgb/image",         "/camera/color/image_raw"),
             ("rgb/camera_info",   "/camera/color/camera_info"),
             ("depth/image",       "/camera/aligned_depth_to_color/image_raw"),
-            ("imu",               "/camera/imu"),
+            ("imu",               "/imu_in_torso/data"),
         ],
         arguments=["--delete_db_on_start"],
     )

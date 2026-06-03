@@ -33,7 +33,7 @@ class DetectionNode(Node):
         self.declare_parameter("model_path", "yolo26n.pt")
         self.declare_parameter("conf", 0.25)
         self.declare_parameter("imgsz", 384)
-        self.declare_parameter("camera_frame", "camera_depth_frame")
+        self.declare_parameter("camera_frame", "d435_link")
         self.declare_parameter("map_frame", "map")
 
         model_path  = self.get_parameter("model_path").value

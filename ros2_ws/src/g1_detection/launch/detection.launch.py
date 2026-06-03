@@ -19,7 +19,7 @@ def generate_launch_description():
                 "model_path":    LaunchConfiguration("model_path"),
                 "conf":          LaunchConfiguration("conf"),
                 "imgsz":         LaunchConfiguration("imgsz"),
-                "camera_frame":  "camera_depth_frame",
+                "camera_frame":  "d435_link",
                 "map_frame":     "map",
             }],
         ),

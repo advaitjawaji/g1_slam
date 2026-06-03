@@ -4,8 +4,8 @@
 rtabmap:
   ros__parameters:
 
-    # Frame IDs
-    frame_id: base_link
+    # Frame IDs — matched to g1_29dof.urdf
+    frame_id: pelvis
     odom_frame_id: odom
     map_frame_id: map
 
