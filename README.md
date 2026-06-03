@@ -420,24 +420,25 @@ python3 -c "from g1_detection.detection_node import DetectionNode; print('OK')"
 | Component | Specification |
 |---|---|
 | Robot | Unitree G1 (29 DOF) |
-| Camera | **External camera required — G1 has NO built-in camera** |
+| Camera | RealSense D435i (included with G1, mounted at `d435_link` on torso) |
 | Compute | Laptop or NUC running Ubuntu 22.04 + ROS2 Humble |
 | Network | G1 connected via Ethernet (static IP `192.168.123.161`) |
 | GPU | Optional — YOLO runs on CPU but GPU recommended for latency |
 
-**G1 built-in sensors (from MuJoCo model):**
-- IMU in torso (`imu_in_torso`)
+**G1 sensors:**
+- RealSense D435i — mounted on torso, frame defined as `d435_link` in URDF
+- IMU in torso (`imu_in_torso`) — used by SLAM
 - IMU in pelvis (`imu_in_pelvis`)
-- No camera, no LiDAR
+- Livox Mid360 LiDAR — frame defined as `mid360_link` in URDF (available for future use)
 
-**Supported external cameras:**
+> **Note:** The MuJoCo model (`g1_29dof.xml`) only defines the mechanical structure (joints, actuators). It does not include sensor definitions — those are in the URDF. The RealSense is physically part of the G1 package.
+
+**Supported cameras (if using a different camera):**
 
 | Camera | Launch argument | Notes |
 |---|---|---|
-| RealSense D435i | `camera:=realsense` (default) | Easiest setup, pip installable |
-| ZED 2i | `camera:=zed` | Used in Human_dtp, requires ZED SDK |
-
-Mount the camera on the G1 torso and update the `d435_joint` origin in the URDF to match the physical position.
+| RealSense D435i | `camera:=realsense` (default) | Built into G1 |
+| ZED 2i | `camera:=zed` | Alternative, used in Human_dtp |
 
 **For Jetson deployment (higher performance YOLO):**
 - Use `yolo26n.engine` (TensorRT optimised, from the `Human_dtp` repo)
