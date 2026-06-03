@@ -42,6 +42,8 @@ g1_slam/
 ├── README.md                        This file
 ├── requirements.txt                 Python dependencies (non-ROS2)
 ├── install_ros2.sh                  ROS2 Humble + all dependencies install script
+├── run_genesis.sh                   Single-command Genesis simulation launcher (tmux)
+├── stop_genesis.sh                  Kill the Genesis simulation session
 ├── test_offline.sh                  One-command offline rosbag pipeline test
 │
 ├── genesis_sim/                     Genesis physics simulation bridge
@@ -230,36 +232,62 @@ Nav2 /cmd_vel → Genesis → moves robot in simulation
 | SLAM (RTAB-Map) | ✅ Yes | Same code, same config |
 | Nav2 planner | ✅ Yes | Same code, same config |
 | Avoidance logic | ✅ Yes | Same thresholds, same override |
-| Human detection (YOLO) | ❌ No | Genesis uses ground truth positions (cylinders not detectable) |
-| Low-level locomotion | ❌ No | Kinematic or RL policy — not Unitree's MPC |
+| Human detection (YOLO) | ❌ No | Genesis publishes ground truth positions directly — cylinders not detectable by YOLO |
+| Low-level locomotion | ❌ No | Kinematic (slides) or RL policy — not Unitree's MPC at 1000Hz |
+
+**Known Genesis issues and fixes:**
+
+| Issue | Fix |
+|---|---|
+| `numba` import error | `pip3 install "coverage>=7.0"` |
+| `Scene.add_entity() got unexpected keyword argument 'pos'` | Genesis 1.0: pos goes inside morph |
+| `camera.render() too many values to unpack` | Genesis 1.0 returns 4 values: `rgb, depth, _, _ = cam.render(...)` |
+| Robot moves in reverse | Genesis quaternion is `(w, x, y, z)` not `(x, y, z, w)` |
+| Simulation laggy with `--viewer` | Camera auto-reduces to 320×240 @ 5Hz in viewer mode |
 
 **Install Genesis:**
 ```bash
 pip3 install genesis-world
+# Fix numba/coverage conflict if needed:
+pip3 install "coverage>=7.0"
 ```
 
-**Run without RL policy (kinematic — robot slides):**
+**Run (single command — opens 4-pane tmux session):**
 ```bash
-# Terminal 1 — Genesis bridge
-cd ~/Desktop/g1_slam
-source /opt/ros/humble/setup.bash
-source ros2_ws/install/setup.bash
-python3 genesis_sim/genesis_node.py
+# Kinematic mode — robot slides, no leg motion
+./run_genesis.sh
 
-# Terminal 2 — ROS2 stack
-ros2 launch g1_bringup genesis.launch.py
+# With GPU viewer window (RTX GPU required)
+./run_genesis.sh --viewer
 
-# Terminal 3 — drive robot or set Nav2 goals
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
+# With RL walking policy (realistic bipedal walking)
+./run_genesis.sh --policy /path/to/g1_policy.pt
+
+# With both
+./run_genesis.sh --viewer --policy /path/to/g1_policy.pt
+
+# Stop everything
+./stop_genesis.sh
 ```
 
-**Run with RL walking policy (realistic walking):**
-```bash
-# Download policy checkpoint from Unitree:
-# https://github.com/unitreerobotics/unitree_rl_gym
-# Look for: logs/g1/policy.pt
+**Tmux pane layout:**
+```
+┌─────────────────────┬─────────────────────┐
+│  Genesis bridge     │  ROS2 stack         │
+│  (starts now)       │  (starts after 8s)  │
+├─────────────────────┼─────────────────────┤
+│  RViz               │  Teleop             │
+│  (starts after 15s) │  (starts after 10s) │
+└─────────────────────┴─────────────────────┘
+Ctrl+B + arrow keys to switch panes
+```
 
-python3 genesis_sim/genesis_node.py --policy /path/to/g1_policy.pt
+**Teleop keys:** `i` forward, `,` backward, `j` rotate left, `l` rotate right, `k` stop
+
+**Download RL policy:**
+```bash
+git clone https://github.com/unitreerobotics/unitree_rl_gym
+# Look for: logs/g1/policy.pt or runs/g1_*/policy.pt
 ```
 
 **RL policy details:**
