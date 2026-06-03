@@ -502,7 +502,7 @@ def build_scene(node: GenesisNode, policy_path: str | None = None):
         # ── Camera publish ─────────────────────────────────────────────
         if sim_time - last_cam >= cam_interval:
             last_cam = sim_time
-            rgb, depth = camera.render(rgb=True, depth=True)
+            rgb, depth, _, _ = camera.render(rgb=True, depth=True)
             node.publish_rgb(rgb)
             node.publish_depth(depth)
             node.publish_camera_info()
