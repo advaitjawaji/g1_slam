@@ -238,6 +238,13 @@ Nav2 /cmd_vel → Genesis → moves robot in simulation
 | Human detection (YOLO) | ❌ No | Genesis publishes ground truth positions directly — cylinders not detectable by YOLO |
 | Low-level locomotion | ❌ No | Kinematic (slides) or RL policy — not Unitree's MPC at 1000Hz |
 
+**Genesis cameras — two separate cameras:**
+
+| Camera | Purpose | How configured |
+|---|---|---|
+| `scene.add_camera()` | Robot's D435 sensor — renders images published to `/camera/color/image_raw` for SLAM + detection | Positioned at exact D435 mount: `xyz=(0.0576, 0.0175, 1.267)`, pitch=47.6° |
+| `viewer_options` in Scene | Spectator camera — what you see in the Genesis window with `--viewer` | `camera_pos=(5, -5, 4)` looking at origin |
+
 **Known Genesis issues and fixes:**
 
 | Issue | Fix |
