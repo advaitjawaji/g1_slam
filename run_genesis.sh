@@ -69,7 +69,7 @@ tmux send-keys -t g1_sim:0.0 \
 # ── Pane 1 (top-right): ROS2 stack ───────────────────────────────────────
 # Wait 8s for Genesis to build the scene before launching ROS2
 tmux send-keys -t g1_sim:0.1 \
-    "sleep 8 && $SOURCE_CMD && echo '=== ROS2 STACK ===' && ros2 launch g1_bringup genesis.launch.py" \
+    "sleep 8 && $SOURCE_CMD && echo '=== ROS2 STACK ===' && ros2 launch g1_bringup genesis.launch.py rviz:=false" \
     Enter
 
 # ── Pane 2 (bottom-left): RViz ───────────────────────────────────────────
