@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!-- Placeholder: replace with official Unitree G1 URDF -->
+<!-- Download from: https://github.com/unitreerobotics/unitree_ros -->
+<robot name="g1" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <link name="base_link"/>
+
+  <link name="camera_link">
+    <visual>
+      <geometry><box size="0.025 0.09 0.025"/></geometry>
+    </visual>
+  </link>
+
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <!-- Adjust xyz/rpy to match actual camera mount on G1 -->
+    <origin xyz="0.1 0.0 0.5" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_depth_frame"/>
+  <joint name="camera_depth_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child link="camera_depth_frame"/>
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+</robot>

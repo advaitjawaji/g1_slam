@@ -1,0 +1,43 @@
+# RTAB-Map parameters tuned for RealSense D435i on Unitree G1
+# Reference: http://wiki.ros.org/rtabmap_ros/Tutorials/SetupOnYourRobot
+
+rtabmap:
+  ros__parameters:
+
+    # Frame IDs
+    frame_id: base_link
+    odom_frame_id: odom
+    map_frame_id: map
+
+    # Subscribe to RGB-D + IMU
+    subscribe_depth: true
+    subscribe_rgb: true
+    subscribe_imu: true
+
+    # Topic remappings handled in launch file
+
+    # Update rate — lower on legged robot to reduce noise sensitivity
+    Rtabmap/DetectionRate: "1.0"
+
+    # Loop closure
+    Kp/MaxFeatures: "500"
+    Vis/MinInliers: "15"
+    Vis/InlierDistance: "0.1"
+
+    # Memory
+    Mem/IncrementalMemory: "true"
+    Mem/InitWMWithAllNodes: "false"
+
+    # Odometry correction — important for legged robots (non-smooth motion)
+    Odom/Strategy: "0"            # Frame-to-map
+    Odom/ResetCountdown: "1"
+
+    # Depth filtering for RealSense D435i
+    Rtabmap/StartNewMapOnLoopClosure: "false"
+    Grid/MaxObstacleHeight: "2.0"
+    Grid/MinGroundWidth: "0.1"
+    Grid/NormalsSegmentation: "true"
+
+    # 3D map
+    Grid/3D: "false"              # Use 2D occupancy grid for navigation
+    Grid/CellSize: "0.05"

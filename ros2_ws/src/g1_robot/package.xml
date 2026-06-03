@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>g1_robot</name>
+  <version>0.1.0</version>
+  <description>Unitree G1 SDK interface — translates ROS2 commands to G1 locomotion SDK</description>
+  <maintainer email="jawajiadvait@gmail.com">Advait Jawaji</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake_python</build_type>
+  </export>
+</package>

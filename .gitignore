@@ -1,0 +1,14 @@
+build/
+install/
+log/
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+venv/
+*.engine
+*.onnx
+*.pt
+model/
+*.zstd.run
+*.tar.xz
