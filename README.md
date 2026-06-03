@@ -48,7 +48,8 @@ g1_slam/
 │
 ├── genesis_sim/                     Genesis physics simulation bridge
 │   ├── genesis_node.py              Main bridge: Genesis ↔ ROS2
-│   └── policy.py                    RL locomotion policy wrapper (Unitree G1)
+│   ├── policy.py                    RL locomotion policy wrapper (Unitree G1)
+│   └── g1_29dof.xml                 MuJoCo model (used by Genesis — better physics than URDF)
 │
 └── ros2_ws/src/
     ├── g1_description/              Robot model
@@ -217,7 +218,9 @@ ros2 launch g1_bringup hardware.launch.py robot_ip:=192.168.123.161
 
 ### Mode 2 — Genesis Simulation
 
-Runs physics simulation with the G1 URDF, two scripted human actors, and a virtual RGB-D camera. Publishes ROS2 topics that feed into the exact same SLAM, detection, and navigation stack as hardware.
+Runs physics simulation with the G1 **MuJoCo model** (`genesis_sim/g1_29dof.xml`), two scripted human actors, and a virtual RGB-D camera. Publishes ROS2 topics that feed into the exact same SLAM, detection, and navigation stack as hardware.
+
+The MuJoCo model is used instead of the URDF because it has exact foot contact geometry, correct joint definitions, and is the same format used to train the Unitree RL locomotion policy — giving much more accurate physics and better sim-to-real transfer.
 
 ```
 Genesis physics + renderer → /camera/* topics → RTAB-Map + Detection
@@ -293,9 +296,10 @@ git clone https://github.com/unitreerobotics/unitree_rl_gym
 **RL policy details:**
 
 The `policy.py` module wraps Unitree's pre-trained RL locomotion policy:
-- **Inputs (51 dims):** IMU angular velocity, gravity vector, cmd_vel, joint positions (14), joint velocities (14), previous actions (14), gait phase (4)
-- **Outputs (14 dims):** joint position offsets for legs + waist
-- **Runs at:** 50Hz (policy) / 100Hz (physics)
+- **Inputs (53 dims):** IMU angular velocity, gravity vector, cmd_vel, joint positions (15), joint velocities (15), previous actions (15), gait phase (4)
+- **Outputs (15 dims):** joint position offsets for legs + waist (12 leg + 3 waist: yaw, roll, pitch)
+- **Runs at:** 50Hz (policy) / 50Hz (physics)
+- **Joint ordering:** matches MuJoCo actuator order in `g1_29dof.xml`
 - **Falls back to:** PD standing controller if no checkpoint provided
 
 When a checkpoint is loaded:
@@ -416,10 +420,24 @@ python3 -c "from g1_detection.detection_node import DetectionNode; print('OK')"
 | Component | Specification |
 |---|---|
 | Robot | Unitree G1 (29 DOF) |
-| Camera | RealSense D435i (mounted at `d435_link` on G1 torso) |
+| Camera | **External camera required — G1 has NO built-in camera** |
 | Compute | Laptop or NUC running Ubuntu 22.04 + ROS2 Humble |
 | Network | G1 connected via Ethernet (static IP `192.168.123.161`) |
 | GPU | Optional — YOLO runs on CPU but GPU recommended for latency |
+
+**G1 built-in sensors (from MuJoCo model):**
+- IMU in torso (`imu_in_torso`)
+- IMU in pelvis (`imu_in_pelvis`)
+- No camera, no LiDAR
+
+**Supported external cameras:**
+
+| Camera | Launch argument | Notes |
+|---|---|---|
+| RealSense D435i | `camera:=realsense` (default) | Easiest setup, pip installable |
+| ZED 2i | `camera:=zed` | Used in Human_dtp, requires ZED SDK |
+
+Mount the camera on the G1 torso and update the `d435_joint` origin in the URDF to match the physical position.
 
 **For Jetson deployment (higher performance YOLO):**
 - Use `yolo26n.engine` (TensorRT optimised, from the `Human_dtp` repo)
