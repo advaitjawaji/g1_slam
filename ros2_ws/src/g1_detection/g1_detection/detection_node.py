@@ -13,7 +13,6 @@ from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
-from cv_bridge import CvBridge
 import tf2_ros
 
 from g1_detection.detection import HumanXZPredictor
@@ -51,7 +50,6 @@ class DetectionNode(Node):
             profile=False,
         )
 
-        self._bridge = CvBridge()
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
@@ -65,20 +63,30 @@ class DetectionNode(Node):
 
         self.get_logger().info("Detection node ready.")
 
+    @staticmethod
+    def _ros_image_to_numpy(msg: Image) -> np.ndarray:
+        dtype = np.uint8 if msg.encoding in ("rgb8", "bgr8") else \
+                np.uint16 if msg.encoding == "16UC1" else np.float32
+        arr = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width, -1)
+        return arr.squeeze()
+
     def _depth_cb(self, msg: Image):
-        depth_m = self._bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough").astype(np.float32) / 1000.0
-        # Convert depth map to XYZ point cloud (Z only — x,y set to 0 as placeholder)
-        # Full intrinsics-based projection can be added via CameraInfo subscription
-        h, w = depth_m.shape
+        depth_raw = self._ros_image_to_numpy(msg).astype(np.float32)
+        # 16UC1 depth is in mm — convert to metres
+        if msg.encoding == "16UC1":
+            depth_raw /= 1000.0
+        h, w = depth_raw.shape
         xyz = np.zeros((h, w, 3), dtype=np.float32)
-        xyz[:, :, 2] = depth_m
+        xyz[:, :, 2] = depth_raw
         self._latest_depth = xyz
 
     def _color_cb(self, msg: Image):
         if self._latest_depth is None:
             return
 
-        color = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        color = self._ros_image_to_numpy(msg)
+        if msg.encoding == "rgb8":
+            color = color[:, :, ::-1]  # RGB → BGR for cv2/YOLO
         point_cloud_xyz = self._latest_depth
 
         T_map_camera = self._get_camera_transform()

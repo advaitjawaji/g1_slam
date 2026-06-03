@@ -2,13 +2,16 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    use_sim = LaunchConfiguration("use_sim", default="false")
+    use_sim        = LaunchConfiguration("use_sim",        default="false")
+    launch_camera  = LaunchConfiguration("launch_camera",  default="true")
+    viz            = LaunchConfiguration("viz",            default="true")
+
     rtabmap_config = PathJoinSubstitution([FindPackageShare("g1_slam"), "config", "rtabmap.yaml"])
 
     realsense_node = Node(
@@ -26,7 +29,7 @@ def generate_launch_description():
             "depth_module.depth_profile": "640x480x30",
             "rgb_camera.color_profile": "640x480x30",
         }],
-        condition=IfCondition(LaunchConfiguration("launch_camera", default="true")),
+        condition=IfCondition(launch_camera),
     )
 
     rtabmap_node = Node(
@@ -34,12 +37,16 @@ def generate_launch_description():
         executable="rtabmap",
         name="rtabmap",
         output="screen",
-        parameters=[rtabmap_config],
+        parameters=[
+            rtabmap_config,
+            {"use_sim_time": PythonExpression(["'", use_sim, "' == 'true'"])},
+        ],
         remappings=[
-            ("rgb/image",         "/camera/color/image_raw"),
-            ("rgb/camera_info",   "/camera/color/camera_info"),
-            ("depth/image",       "/camera/aligned_depth_to_color/image_raw"),
-            ("imu",               "/imu_in_torso/data"),
+            ("rgb/image",       "/camera/color/image_raw"),
+            ("rgb/camera_info", "/camera/color/camera_info"),
+            ("depth/image",     "/camera/aligned_depth_to_color/image_raw"),
+            ("imu",             "/imu_in_torso/data"),
+            ("odom",            "/odom/raw"),
         ],
         arguments=["--delete_db_on_start"],
     )
@@ -49,13 +56,17 @@ def generate_launch_description():
         executable="rtabmap_viz",
         name="rtabmap_viz",
         output="screen",
-        parameters=[rtabmap_config],
-        remappings=[
-            ("rgb/image",         "/camera/color/image_raw"),
-            ("rgb/camera_info",   "/camera/color/camera_info"),
-            ("depth/image",       "/camera/aligned_depth_to_color/image_raw"),
+        parameters=[
+            rtabmap_config,
+            {"use_sim_time": PythonExpression(["'", use_sim, "' == 'true'"])},
         ],
-        condition=IfCondition(LaunchConfiguration("viz", default="true")),
+        remappings=[
+            ("rgb/image",       "/camera/color/image_raw"),
+            ("rgb/camera_info", "/camera/color/camera_info"),
+            ("depth/image",     "/camera/aligned_depth_to_color/image_raw"),
+            ("odom",            "/odom/raw"),
+        ],
+        condition=IfCondition(viz),
     )
 
     return LaunchDescription([

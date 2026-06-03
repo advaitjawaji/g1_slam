@@ -6,13 +6,13 @@
   <maintainer email="jawajiadvait@gmail.com">Advait Jawaji</maintainer>
   <license>MIT</license>
 
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <buildtool_depend>ament_python</buildtool_depend>
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
 
   <export>
-    <build_type>ament_cmake_python</build_type>
+    <build_type>ament_python</build_type>
   </export>
 </package>

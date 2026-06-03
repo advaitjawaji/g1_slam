@@ -10,7 +10,10 @@ try:
 except ImportError:
     torch = None
 
-from g1_detection.EigenTrajectory.eigen import EigenTrajectoryInference
+try:
+    from g1_detection.EigenTrajectory.eigen import EigenTrajectoryInference
+except (ImportError, SystemExit):
+    EigenTrajectoryInference = None
 
 
 class EigenTrajectoryAdapter:
