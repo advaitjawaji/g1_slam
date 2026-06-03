@@ -169,7 +169,6 @@ def generate_launch_description():
         joint_state_publisher,
         rtabmap_odom,
         rtabmap,
-        detection,
         human_obstacle,
         nav2,
         rviz_node,
