@@ -34,12 +34,20 @@ class DetectionNode(Node):
         self.declare_parameter("imgsz", 384)
         self.declare_parameter("camera_frame", "d435_link")
         self.declare_parameter("map_frame", "map")
+        # Camera topic names — overridable so a RealSense/ZED naming mismatch
+        # is a launch arg, not a code edit. Check `ros2 topic list | grep camera`.
+        self.declare_parameter("color_topic",       "/camera/color/image_raw")
+        self.declare_parameter("depth_topic",       "/camera/aligned_depth_to_color/image_raw")
+        self.declare_parameter("camera_info_topic", "/camera/color/camera_info")
 
         model_path  = self.get_parameter("model_path").value
         conf        = self.get_parameter("conf").value
         imgsz       = self.get_parameter("imgsz").value
         self._camera_frame = self.get_parameter("camera_frame").value
         self._map_frame    = self.get_parameter("map_frame").value
+        color_topic = self.get_parameter("color_topic").value
+        depth_topic = self.get_parameter("depth_topic").value
+        info_topic  = self.get_parameter("camera_info_topic").value
 
         self._predictor = HumanXZPredictor(
             model_path=model_path,
@@ -62,9 +70,12 @@ class DetectionNode(Node):
         self._u_term = None   # cached (u - cx)/fx grid
         self._v_term = None   # cached (v - cy)/fy grid
 
-        self.create_subscription(Image, "/camera/color/image_raw",   self._color_cb, QOS_SENSOR)
-        self.create_subscription(Image, "/camera/aligned_depth_to_color/image_raw", self._depth_cb, QOS_SENSOR)
-        self.create_subscription(CameraInfo, "/camera/color/camera_info", self._info_cb, QOS_SENSOR)
+        self.create_subscription(Image,      color_topic, self._color_cb, QOS_SENSOR)
+        self.create_subscription(Image,      depth_topic, self._depth_cb, QOS_SENSOR)
+        self.create_subscription(CameraInfo, info_topic,  self._info_cb,  QOS_SENSOR)
+        self.get_logger().info(
+            f"Subscribed to color='{color_topic}' depth='{depth_topic}' info='{info_topic}'"
+        )
 
         self._pub_markers = self.create_publisher(MarkerArray, "/humans/markers", 10)
         self._pub_cmd     = self.create_publisher(String, "/g1/human_cmd", 10)
