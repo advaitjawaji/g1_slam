@@ -458,6 +458,7 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
     last_cam    = 0.0
     last_imu    = 0.0
     last_odom   = 0.0
+    last_human  = 0.0
     last_policy = 0.0
 
     sim_time  = 0.0
@@ -564,8 +565,8 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
         node.publish_odom(robot_x, robot_y, robot_yaw, vx, vy, wz)
 
         # ── Ground truth human positions (bypasses YOLO) ───────────────
-        # Publishes /humans/markers and /g1/human_cmd at camera rate
-        if sim_time - last_cam >= cam_interval:
+        if sim_time - last_human >= cam_interval:
+            last_human = sim_time
             node.publish_ground_truth_humans(
                 humans, robot_x, robot_y, robot_yaw
             )
