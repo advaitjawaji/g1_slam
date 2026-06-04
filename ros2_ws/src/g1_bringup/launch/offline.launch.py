@@ -39,7 +39,7 @@ def generate_launch_description():
 
     urdf_path   = os.path.join(pkg_desc, "urdf", "g1_29dof.urdf")
     rtabmap_cfg = PathJoinSubstitution([FindPackageShare("g1_slam"), "config", "rtabmap.yaml"])
-    nav2_params = os.path.join(pkg_bringup, "config", "nav2_params.yaml")
+    nav2_params = os.path.join(pkg_bringup, "config", "nav2_params_sim.yaml")
     rviz_config = os.path.join(pkg_bringup, "config", "offline.rviz")
 
     with open(urdf_path, "r") as f:

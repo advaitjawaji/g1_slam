@@ -52,7 +52,7 @@ def generate_launch_description():
     pkg_bringup = get_package_share_directory("g1_bringup")
 
     urdf_path      = os.path.join(pkg_desc, "urdf", "g1_29dof.urdf")
-    nav2_params    = os.path.join(pkg_bringup, "config", "nav2_params.yaml")
+    nav2_params    = os.path.join(pkg_bringup, "config", "nav2_params_hw.yaml")
     rviz_config    = os.path.join(pkg_bringup, "config", "demo.rviz")
 
     with open(urdf_path, "r") as f:

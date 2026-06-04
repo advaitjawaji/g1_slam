@@ -1,4 +1,9 @@
-# Nav2 parameters tuned for Unitree G1 humanoid robot
+# Nav2 parameters — GENESIS SIMULATION ONLY.
+# Tuned permissively for the feature-poor kinematic sim:
+#   - obstacle avoidance is OFF (no real obstacle source in the sim costmaps)
+#   - collision detection disabled, unknown space treated as free
+#   - position-only goal checker
+# For real hardware use nav2_params_hw.yaml (obstacle-aware). Do NOT run this on the robot.
 # G1 footprint: ~0.45m x 0.35m, max walking speed ~0.8 m/s
 
 bt_navigator:
