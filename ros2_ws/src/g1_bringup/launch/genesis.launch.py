@@ -18,7 +18,8 @@ Usage:
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, TimerAction, LogInfo
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, LogInfo
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -107,44 +108,19 @@ def generate_launch_description():
         )],
     )
 
-    # ── Nav2 ─────────────────────────────────────────────────────────────
+    # ── Nav2 — use nav2_bringup which handles lifecycle correctly ────────
+    # Wait 25s so RTAB-Map has time to build a map before Nav2 configures
     nav2 = TimerAction(
-        period=12.0,
-        actions=[
-            Node(
-                package="nav2_controller",
-                executable="controller_server",
-                output="screen",
-                parameters=[nav2_params],
-                remappings=[("cmd_vel", "/cmd_vel")],
-            ),
-            Node(
-                package="nav2_planner",
-                executable="planner_server",
-                output="screen",
-                parameters=[nav2_params],
-            ),
-            Node(
-                package="nav2_bt_navigator",
-                executable="bt_navigator",
-                output="screen",
-                parameters=[nav2_params],
-            ),
-            Node(
-                package="nav2_lifecycle_manager",
-                executable="lifecycle_manager",
-                name="lifecycle_manager_navigation",
-                output="screen",
-                parameters=[{
-                    "autostart":  True,
-                    "node_names": [
-                        "controller_server",
-                        "planner_server",
-                        "bt_navigator",
-                    ],
-                }],
-            ),
-        ],
+        period=25.0,
+        actions=[IncludeLaunchDescription(
+            PythonLaunchDescriptionSource([
+                PathJoinSubstitution([FindPackageShare("nav2_bringup"), "launch", "navigation_launch.py"])
+            ]),
+            launch_arguments={
+                "use_sim_time": "false",
+                "params_file":  nav2_params,
+            }.items(),
+        )],
     )
 
     # ── RViz ─────────────────────────────────────────────────────────────
