@@ -128,11 +128,13 @@ global_costmap:
       use_sim_time: false
       robot_radius: 0.30
       resolution: 0.05
-      track_unknown_space: true
-      plugins: ["static_layer", "inflation_layer"]
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: false
+      track_unknown_space: false   # treat unknown as free so planner can plan
+      width: 30                    # 30m x 30m covers the whole Genesis room
+      height: 30
+      origin_x: -15.0
+      origin_y: -15.0
+      rolling_window: false
+      plugins: ["inflation_layer"]  # no static_layer — use free space for planning
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
