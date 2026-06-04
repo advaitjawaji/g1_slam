@@ -69,8 +69,8 @@ controller_server:
     general_goal_checker:
       stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.30    # G1 doesn't need to stop precisely
-      yaw_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.35    # position-only: stop when within 35cm
+      yaw_goal_tolerance: 3.15   # ~pi: ignore final heading (avoids overshoot/figure-8 loops)
 
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
