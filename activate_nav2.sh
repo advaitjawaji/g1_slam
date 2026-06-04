@@ -9,7 +9,7 @@ echo "Activating Nav2 nodes..."
 
 lifecycle_set() {
     local node=$1 transition=$2
-    timeout 8 ros2 lifecycle set /$node $transition 2>/dev/null || echo "timeout/skip"
+    timeout 30 ros2 lifecycle set /$node $transition 2>/dev/null || echo "timeout/skip"
 }
 
 for node in controller_server smoother_server planner_server behavior_server waypoint_follower velocity_smoother; do
