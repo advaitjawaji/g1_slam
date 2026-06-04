@@ -352,7 +352,10 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
 
     scene = gs.Scene(
         show_viewer=use_viewer,
-        sim_options=gs.options.SimOptions(dt=node.SIM_DT),
+        sim_options=gs.options.SimOptions(
+            dt=node.SIM_DT,
+            gravity=(0.0, 0.0, 0.0),  # disable gravity — kinematic robot + static walls
+        ),
         viewer_options=gs.options.ViewerOptions(
             camera_pos=(5, -5, 4),
             camera_lookat=(0, 0, 1),
