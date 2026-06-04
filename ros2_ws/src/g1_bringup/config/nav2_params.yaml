@@ -92,10 +92,10 @@ controller_server:
       use_cost_regulated_linear_velocity_scaling: false
       regulated_linear_scaling_min_radius: 0.8
       regulated_linear_scaling_min_speed: 0.25
-      use_rotate_to_heading: false   # smooth pursuit from start; avoids rotate-then-stuck in kinematic sim
+      use_rotate_to_heading: true    # turn in place to face goal (handles goals behind the robot)
       allow_reversing: false
       rotate_to_heading_min_angle: 0.785
-      max_angular_accel: 1.0
+      max_angular_accel: 3.2
       max_robot_pose_search_dist: 10.0
 
 local_costmap:
