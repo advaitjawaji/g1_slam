@@ -74,10 +74,10 @@ QOS_SENSOR = QoSProfile(
     depth=1,
 )
 
-# Camera intrinsics matching RealSense D435i at 640x480
-CAM_W, CAM_H = 640, 480
-CAM_FX = 615.0
-CAM_FY = 615.0
+# Low resolution for CPU rendering speed — RTAB-Map works fine at 160x120
+CAM_W, CAM_H = 160, 120
+CAM_FX = 154.0   # scaled from 615 * (160/640)
+CAM_FY = 154.0
 CAM_CX = 320.0
 CAM_CY = 240.0
 CAM_FOV_DEG = 2 * math.degrees(math.atan2(CAM_W / 2, CAM_FX))  # ~86 deg
@@ -348,9 +348,10 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
 
     # Viewer mode: use GPU but reduce camera res + rate to avoid double-render lag
     backend = gs.cuda if use_viewer else gs.cpu
-    cam_w   = 320 if use_viewer else CAM_W
-    cam_h   = 240 if use_viewer else CAM_H
-    cam_hz  = 5   if use_viewer else node.PUB_HZ
+    # Use same small resolution in both modes — CPU rendering is the bottleneck
+    cam_w  = CAM_W
+    cam_h  = CAM_H
+    cam_hz = node.PUB_HZ  # target 10Hz — actual rate depends on CPU speed
 
     gs.init(backend=backend, logging_level="warning")
 

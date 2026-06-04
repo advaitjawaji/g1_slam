@@ -16,8 +16,12 @@ rtabmap:
 
     # Topic remappings handled in launch file
 
-    # Update rate — lower on legged robot to reduce noise sensitivity
+    # Update rate
     Rtabmap/DetectionRate: "1.0"
+
+    # Larger sync queue to handle slow Genesis CPU camera (~1-3 Hz)
+    topic_queue_size: 30
+    sync_queue_size: 30
 
     # Loop closure
     Kp/MaxFeatures: "500"
