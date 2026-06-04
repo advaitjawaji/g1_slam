@@ -131,6 +131,16 @@ def generate_launch_description():
         condition=IfCondition(rviz),
     )
 
+    # Static map→odom transform: genesis uses kinematic odometry,
+    # RTAB-Map visual odom has quality=0 in plain scenes.
+    # This lets Nav2 plan using the robot's kinematic position.
+    map_odom_tf = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="map_odom_static_tf",
+        arguments=["0", "0", "0", "0", "0", "0", "map", "odom"],
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument("model_path", default_value="yolo11n.pt"),
         DeclareLaunchArgument("rviz",       default_value="true"),
@@ -143,6 +153,7 @@ def generate_launch_description():
 
         robot_state_publisher,
         joint_state_publisher,
+        map_odom_tf,
         rtabmap_odom,
         rtabmap,
         human_obstacle,
