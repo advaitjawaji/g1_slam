@@ -99,9 +99,10 @@ class GenesisNode(Node):
         self._robot_yaw = 0.0
 
         # Publishers
-        self._rgb_pub      = self.create_publisher(Image,       "/camera/color/image_raw",                  QOS_SENSOR)
-        self._depth_pub    = self.create_publisher(Image,       "/camera/aligned_depth_to_color/image_raw", QOS_SENSOR)
-        self._info_pub     = self.create_publisher(CameraInfo,  "/camera/color/camera_info",                QOS_SENSOR)
+        # Camera topics use RELIABLE QoS (depth=10) so RTAB-Map can sync timestamps
+        self._rgb_pub      = self.create_publisher(Image,       "/camera/color/image_raw",                  10)
+        self._depth_pub    = self.create_publisher(Image,       "/camera/aligned_depth_to_color/image_raw", 10)
+        self._info_pub     = self.create_publisher(CameraInfo,  "/camera/color/camera_info",                10)
         self._imu_pub      = self.create_publisher(Imu,         "/imu_in_torso/data",                       QOS_SENSOR)
         self._odom_pub     = self.create_publisher(Odometry,    "/odom/raw",                                10)
         self._markers_pub  = self.create_publisher(MarkerArray, "/humans/markers",                          10)
@@ -127,41 +128,43 @@ class GenesisNode(Node):
 
     # ── Publishers ────────────────────────────────────────────────────────
 
-    def publish_rgb(self, rgb: np.ndarray):
-        msg = Image()
-        msg.header = self._header("d435_link")
-        msg.height, msg.width = rgb.shape[:2]
-        msg.encoding = "rgb8"
-        msg.step = msg.width * 3
-        msg.data = rgb.astype(np.uint8).tobytes()
-        self._rgb_pub.publish(msg)
+    def publish_camera_frame(self, rgb: np.ndarray, depth: np.ndarray):
+        """Publish RGB, depth and camera_info with identical timestamps for RTAB-Map sync."""
+        stamp = self.get_clock().now().to_msg()
+        header = Header()
+        header.stamp = stamp
+        header.frame_id = "d435_link"
 
-    def publish_depth(self, depth: np.ndarray):
-        # depth in metres → convert to uint16 mm for RealSense compatibility
+        # RGB
+        rgb_msg = Image()
+        rgb_msg.header = header
+        rgb_msg.height, rgb_msg.width = rgb.shape[:2]
+        rgb_msg.encoding = "rgb8"
+        rgb_msg.step = rgb_msg.width * 3
+        rgb_msg.data = rgb.astype(np.uint8).tobytes()
+        self._rgb_pub.publish(rgb_msg)
+
+        # Depth (mm as uint16)
         depth_mm = (depth * 1000.0).astype(np.uint16)
-        msg = Image()
-        msg.header = self._header("d435_link")
-        msg.height, msg.width = depth_mm.shape[:2]
-        msg.encoding = "16UC1"
-        msg.step = msg.width * 2
-        msg.data = depth_mm.tobytes()
-        self._depth_pub.publish(msg)
+        depth_msg = Image()
+        depth_msg.header = header
+        depth_msg.height, depth_msg.width = depth_mm.shape[:2]
+        depth_msg.encoding = "16UC1"
+        depth_msg.step = depth_msg.width * 2
+        depth_msg.data = depth_mm.tobytes()
+        self._depth_pub.publish(depth_msg)
 
-    def publish_camera_info(self):
-        msg = CameraInfo()
-        msg.header = self._header("d435_link")
-        msg.width  = CAM_W
-        msg.height = CAM_H
-        msg.k = [CAM_FX, 0.0, CAM_CX,
-                 0.0, CAM_FY, CAM_CY,
-                 0.0, 0.0, 1.0]
-        msg.distortion_model = "plumb_bob"
-        msg.d = [0.0, 0.0, 0.0, 0.0, 0.0]
-        msg.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-        msg.p = [CAM_FX, 0.0, CAM_CX, 0.0,
-                 0.0, CAM_FY, CAM_CY, 0.0,
-                 0.0, 0.0, 1.0, 0.0]
-        self._info_pub.publish(msg)
+        # Camera info — same stamp
+        info_msg = CameraInfo()
+        info_msg.header = header
+        info_msg.width  = rgb_msg.width
+        info_msg.height = rgb_msg.height
+        info_msg.k = [CAM_FX, 0.0, CAM_CX, 0.0, CAM_FY, CAM_CY, 0.0, 0.0, 1.0]
+        info_msg.distortion_model = "plumb_bob"
+        info_msg.d = [0.0, 0.0, 0.0, 0.0, 0.0]
+        info_msg.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        info_msg.p = [CAM_FX, 0.0, CAM_CX, 0.0, 0.0, CAM_FY, CAM_CY, 0.0, 0.0, 0.0, 1.0, 0.0]
+        self._info_pub.publish(info_msg)
 
     def publish_imu(self, lin_acc: np.ndarray, ang_vel: np.ndarray):
         msg = Imu()
@@ -528,9 +531,7 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
         if sim_time - last_cam >= cam_interval:
             last_cam = sim_time
             rgb, depth, _, _ = camera.render(rgb=True, depth=True)
-            node.publish_rgb(rgb)
-            node.publish_depth(depth)
-            node.publish_camera_info()
+            node.publish_camera_frame(rgb, depth)
 
         # ── IMU publish ────────────────────────────────────────────────
         if sim_time - last_imu >= imu_interval:
