@@ -55,13 +55,41 @@ class DetectionNode(Node):
 
         self._latest_depth: np.ndarray | None = None
 
+        # Camera intrinsics (filled from /camera/color/camera_info).
+        # Needed to back-project the depth image into a full XYZ cloud so the
+        # predictor can read each person's lateral (X) AND forward (Z) position.
+        self._fx = self._fy = self._cx = self._cy = None
+        self._u_term = None   # cached (u - cx)/fx grid
+        self._v_term = None   # cached (v - cy)/fy grid
+
         self.create_subscription(Image, "/camera/color/image_raw",   self._color_cb, QOS_SENSOR)
         self.create_subscription(Image, "/camera/aligned_depth_to_color/image_raw", self._depth_cb, QOS_SENSOR)
+        self.create_subscription(CameraInfo, "/camera/color/camera_info", self._info_cb, QOS_SENSOR)
 
         self._pub_markers = self.create_publisher(MarkerArray, "/humans/markers", 10)
         self._pub_cmd     = self.create_publisher(String, "/g1/human_cmd", 10)
 
-        self.get_logger().info("Detection node ready.")
+        self.get_logger().info("Detection node ready (waiting for camera_info).")
+
+    def _info_cb(self, msg: CameraInfo):
+        if self._fx is not None:
+            return  # intrinsics are static — only need them once
+        self._fx, self._fy = msg.k[0], msg.k[4]
+        self._cx, self._cy = msg.k[2], msg.k[5]
+        self.get_logger().info(
+            f"Got intrinsics: fx={self._fx:.1f} fy={self._fy:.1f} "
+            f"cx={self._cx:.1f} cy={self._cy:.1f}"
+        )
+
+    def _ensure_backproject_grid(self, h: int, w: int):
+        """Pre-compute (u-cx)/fx and (v-cy)/fy once for the image size."""
+        if self._u_term is not None and self._u_term.shape == (h, w):
+            return
+        us = np.arange(w, dtype=np.float32)
+        vs = np.arange(h, dtype=np.float32)
+        uu, vv = np.meshgrid(us, vs)
+        self._u_term = (uu - self._cx) / self._fx
+        self._v_term = (vv - self._cy) / self._fy
 
     @staticmethod
     def _ros_image_to_numpy(msg: Image) -> np.ndarray:
@@ -71,12 +99,21 @@ class DetectionNode(Node):
         return arr.squeeze()
 
     def _depth_cb(self, msg: Image):
+        if self._fx is None:
+            return  # no intrinsics yet — can't back-project
+
         depth_raw = self._ros_image_to_numpy(msg).astype(np.float32)
         # 16UC1 depth is in mm — convert to metres
         if msg.encoding == "16UC1":
             depth_raw /= 1000.0
+
         h, w = depth_raw.shape
-        xyz = np.zeros((h, w, 3), dtype=np.float32)
+        self._ensure_backproject_grid(h, w)
+
+        # Full pinhole back-projection: X=(u-cx)Z/fx, Y=(v-cy)Z/fy, Z=depth
+        xyz = np.empty((h, w, 3), dtype=np.float32)
+        xyz[:, :, 0] = self._u_term * depth_raw
+        xyz[:, :, 1] = self._v_term * depth_raw
         xyz[:, :, 2] = depth_raw
         self._latest_depth = xyz
 
