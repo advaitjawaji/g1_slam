@@ -82,6 +82,11 @@ def generate_launch_description():
         parameters=[
             rtabmap_cfg,
             {"use_sim_time": False},
+            # Do NOT publish map->odom — the static_transform_publisher owns
+            # that edge in simulation. Two publishers on map->odom cause the
+            # TF to flicker once RTAB-Map's pose graph drifts, which breaks
+            # navigation after the first goal.
+            {"publish_tf": False},
         ],
         remappings=[
             ("rgb/image",       "/camera/color/image_raw"),
