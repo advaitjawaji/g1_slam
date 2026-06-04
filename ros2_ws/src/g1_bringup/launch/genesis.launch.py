@@ -63,7 +63,7 @@ def generate_launch_description():
         parameters=[{
             "frame_id":       "pelvis",
             "odom_frame_id":  "odom",
-            "publish_tf":     True,
+            "publish_tf":     False,  # genesis_node publishes odom→pelvis TF
             "use_sim_time":   False,
         }],
         remappings=[
