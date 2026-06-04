@@ -294,6 +294,44 @@ Ctrl+B + arrow keys to switch panes
 
 **Teleop keys:** `i` forward, `,` backward, `j` rotate left, `l` rotate right, `k` stop
 
+**Running autonomous navigation + avoidance:**
+
+After `./run_genesis.sh`, the Nav2 lifecycle manager can be flaky to autostart. If goals are
+not accepted, manually activate Nav2:
+```bash
+./activate_nav2.sh
+# confirm all three report "active [3]":
+for n in controller_server planner_server bt_navigator; do
+  echo -n "$n: "; ros2 lifecycle get /$n 2>/dev/null | grep -v XMLPARSER | head -1
+done
+```
+
+Send a navigation goal (use the `odom` frame — see TF note below):
+```bash
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+  "{pose: {header: {frame_id: 'odom'}, pose: {position: {x: 3.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}}"
+```
+Or click **2D Goal Pose** in RViz.
+
+The robot turns to face the goal, drives to it, and stops. When a simulated human
+(red cylinder) comes within the front-stop distance, `/g1/human_cmd` publishes `STOP` and the
+robot freezes until the human clears, then resumes — this is the avoidance demo.
+
+**Genesis simulation notes / gotchas (learned the hard way):**
+
+| Symptom | Cause | Fix (already applied) |
+|---|---|---|
+| Robot reaches 1st goal then all later goals fail | Two publishers on `map→odom` (static TF + RTAB-Map SLAM node) flicker once the pose graph drifts | `publish_tf: false` on the rtabmap SLAM node — static publisher owns `map→odom` |
+| `follow_path` aborts continuously, no `/cmd_vel` | RPP collision detection + costmaps treating empty/unknown space as lethal | `use_collision_detection: false`, `track_unknown_space: false`, costmaps use inflation-only |
+| Robot loops in a figure-8, never stops at goal | Strict `yaw_goal_tolerance` — arrives at position but wrong heading | `yaw_goal_tolerance: 3.15` (position-only goal checker) |
+| Robot won't turn around for a goal behind it | `use_rotate_to_heading: false` + no reversing | `use_rotate_to_heading: true` with loose yaw tolerance |
+| Camera only ~1 Hz, SLAM starves | CPU rendering 640×480 too slow | Camera at 160×120; larger RTAB-Map sync queue |
+| Goals must be sent in the `odom` frame | Visual odom is feature-poor in the plain room, so `map→odom` is a static identity; `map` and `odom` coincide | Send goals in `odom` (or `map`, they're equal) |
+
+> These tweaks make Nav2 robust in the *feature-poor kinematic simulation*. On real hardware
+> (real RealSense, real features, real costmap obstacle data) the standard obstacle-aware
+> settings apply — see `hardware.launch.py`.
+
 **Download RL policy:**
 ```bash
 git clone https://github.com/unitreerobotics/unitree_rl_gym
