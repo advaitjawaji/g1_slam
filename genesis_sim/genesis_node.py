@@ -102,6 +102,9 @@ class GenesisNode(Node):
         self._robot_y = 0.0
         self._robot_yaw = 0.0
 
+        # Human avoidance state (sim-equivalent of robot_node's override)
+        self._human_cmd = "NORMAL_OPERATION"
+
         # Publishers
         # Camera topics use RELIABLE QoS (depth=10) so RTAB-Map can sync timestamps
         self._rgb_pub      = self.create_publisher(Image,       "/camera/color/image_raw",                  10)
@@ -297,9 +300,29 @@ class GenesisNode(Node):
 
         self._markers_pub.publish(marker_array)
 
+        # Store for the velocity override applied in the main loop
+        with self._lock:
+            self._human_cmd = worst_cmd
+
         cmd_msg = String()
         cmd_msg.data = worst_cmd
         self._human_cmd_pub.publish(cmd_msg)
+
+    def get_motion_scale(self):
+        """
+        Velocity scale based on human proximity — the sim-equivalent of
+        robot_node's safety override on real hardware.
+          STOP             -> 0.0 (block all motion)
+          SLOW_DOWN        -> 0.4
+          NORMAL_OPERATION -> 1.0
+        """
+        with self._lock:
+            cmd = self._human_cmd
+        if cmd == "STOP":
+            return 0.0
+        if cmd == "SLOW_DOWN":
+            return 0.4
+        return 1.0
 
     def _header(self, frame_id: str) -> Header:
         h = Header()
@@ -470,6 +493,14 @@ def build_scene(node: GenesisNode, policy_path: str | None = None, use_viewer: b
         t_start = time.perf_counter()
         dt = node.SIM_DT
         vx, vy, wz = node.get_cmd_vel()
+
+        # Human avoidance override: scale Nav2's velocity by human proximity.
+        # On hardware this happens in robot_node; in sim genesis_node is the
+        # actuator, so the override is applied here.
+        scale = node.get_motion_scale()
+        vx *= scale
+        vy *= scale
+        wz *= scale
 
         if use_rl:
             # ── RL POLICY MODE ─────────────────────────────────────────
