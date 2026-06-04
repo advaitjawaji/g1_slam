@@ -7,17 +7,22 @@ source "$(cd "$(dirname "$0")/ros2_ws" && pwd)/install/setup.bash"
 
 echo "Activating Nav2 nodes..."
 
+lifecycle_set() {
+    local node=$1 transition=$2
+    timeout 8 ros2 lifecycle set /$node $transition 2>/dev/null || echo "timeout/skip"
+}
+
 for node in controller_server smoother_server planner_server behavior_server waypoint_follower velocity_smoother; do
-    echo -n "  $node: "
-    ros2 lifecycle set /$node configure 2>/dev/null
-    result=$(ros2 lifecycle set /$node activate 2>/dev/null)
-    echo "$result"
-    sleep 0.5
+    echo -n "  $node configure: "
+    lifecycle_set $node configure
+    echo -n "  $node activate:  "
+    lifecycle_set $node activate
 done
 
-echo -n "  bt_navigator: "
-ros2 lifecycle set /bt_navigator configure 2>/dev/null
-ros2 lifecycle set /bt_navigator activate 2>/dev/null
+echo -n "  bt_navigator configure: "
+lifecycle_set bt_navigator configure
+echo -n "  bt_navigator activate:  "
+lifecycle_set bt_navigator activate
 echo "done"
 
 echo ""
