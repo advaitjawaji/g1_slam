@@ -128,6 +128,7 @@ ros2 launch g1_bringup hardware.launch.py robot_ip:=192.168.123.161   # camera:=
 - **numba import error** → `pip3 install "coverage>=7.0"`.
 - **NumPy 2 vs cv_bridge/matplotlib** → removed cv_bridge dep (direct numpy image conversion), upgraded matplotlib.
 - **colcon build `canonicalize_version`** → `pip3 install -U packaging`.
+- **zed_components "Could NOT find CUDA: required is at least 13"** → ZED SDK 5.2.3's cmake demands the CUDA 13 toolkit but the dev machine only has 12.5 (the SDK binary itself only needs the driver). Fixed: patched config at `ros2_ws/cmake/zed/`; build with `colcon build --packages-up-to zed_wrapper --cmake-args -DZED_DIR=$PWD/cmake/zed`. The wrapper clone (`ros2_ws/src/zed-ros2-wrapper`, v5.3.1) is gitignored — re-clone with `--recurse-submodules` on a fresh checkout. Smoke-tested 2026-06-10: node loads, topics are `/zed/zed_node/...`.
 
 ## 9. Immediate next steps (priority order)
 1. **Detection test with real camera** (RealSense or ZED) — §6. Closes the biggest gap (real YOLO). No robot needed.

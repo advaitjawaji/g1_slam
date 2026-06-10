@@ -12,3 +12,4 @@ venv/
 model/
 *.zstd.run
 *.tar.xz
+ros2_ws/src/zed-ros2-wrapper/
