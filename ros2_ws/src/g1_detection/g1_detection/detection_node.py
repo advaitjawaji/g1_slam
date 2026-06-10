@@ -104,8 +104,13 @@ class DetectionNode(Node):
 
     @staticmethod
     def _ros_image_to_numpy(msg: Image) -> np.ndarray:
-        dtype = np.uint8 if msg.encoding in ("rgb8", "bgr8") else \
-                np.uint16 if msg.encoding == "16UC1" else np.float32
+        enc = msg.encoding
+        if enc in ("rgb8", "bgr8", "rgba8", "bgra8", "mono8"):
+            dtype = np.uint8           # RealSense color, ZED color (bgra8)
+        elif enc == "16UC1":
+            dtype = np.uint16          # RealSense depth (mm)
+        else:
+            dtype = np.float32         # 32FC1 — ZED depth (metres)
         arr = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width, -1)
         return arr.squeeze()
 
@@ -132,9 +137,20 @@ class DetectionNode(Node):
         if self._latest_depth is None:
             return
 
-        color = self._ros_image_to_numpy(msg)
-        if msg.encoding == "rgb8":
-            color = color[:, :, ::-1]  # RGB → BGR for cv2/YOLO
+        img = self._ros_image_to_numpy(msg)
+        enc = msg.encoding
+        # Produce a contiguous 3-channel BGR image for YOLO/cv2
+        if enc == "rgb8":
+            color = img[:, :, ::-1]            # RGB  -> BGR
+        elif enc == "bgr8":
+            color = img
+        elif enc == "rgba8":
+            color = img[:, :, 2::-1]           # RGBA -> BGR (drop alpha)
+        elif enc == "bgra8":
+            color = img[:, :, :3]              # BGRA -> BGR (drop alpha) — ZED
+        else:
+            color = img
+        color = np.ascontiguousarray(color)
         point_cloud_xyz = self._latest_depth
 
         T_map_camera = self._get_camera_transform()
