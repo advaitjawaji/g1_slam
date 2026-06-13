@@ -16,6 +16,7 @@ setup(
     entry_points={
         "console_scripts": [
             "robot_node = g1_robot.robot_node:main",
+            "odom_bridge = g1_robot.odom_bridge:main",
         ],
     },
 )

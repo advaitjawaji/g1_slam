@@ -40,6 +40,7 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     robot_ip   = LaunchConfiguration("robot_ip",   default="192.168.123.161")
+    net_iface  = LaunchConfiguration("net_iface",  default="")
     camera     = LaunchConfiguration("camera",     default="realsense")
     model_path = LaunchConfiguration("model_path", default="yolo11n.pt")
     rviz       = LaunchConfiguration("rviz",       default="true")
@@ -195,6 +196,7 @@ def generate_launch_description():
             parameters=[{
                 "robot_ip":   robot_ip,
                 "robot_port": 8080,
+                "net_iface":  net_iface,
             }],
         )],
     )
@@ -212,6 +214,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("robot_ip",   default_value="192.168.123.161",
                               description="G1 robot IP address"),
+        DeclareLaunchArgument("net_iface",  default_value="",
+                              description="Host NIC on robot subnet for DDS (e.g. enp4s0); empty=auto"),
         DeclareLaunchArgument("camera",     default_value="realsense",
                               description="Camera type: 'realsense' or 'zed'"),
         DeclareLaunchArgument("model_path", default_value="yolo11n.pt",

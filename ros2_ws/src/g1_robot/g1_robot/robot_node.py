@@ -15,10 +15,12 @@ class RobotNode(Node):
 
         self.declare_parameter("robot_ip",   "192.168.123.161")
         self.declare_parameter("robot_port", 8080)
+        self.declare_parameter("net_iface",  "")  # host NIC on robot subnet; "" = auto
 
         config = RobotConfig(
             ip=self.get_parameter("robot_ip").value,
             port=self.get_parameter("robot_port").value,
+            net_iface=self.get_parameter("net_iface").value,
         )
 
         self._robot = G1Robot()

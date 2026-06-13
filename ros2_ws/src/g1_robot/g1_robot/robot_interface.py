@@ -13,6 +13,9 @@ class RobotMode(Enum):
 class RobotConfig:
     ip: str
     port: int = 8080
+    # Host network interface on the robot's subnet (e.g. "enp4s0"). DDS binds to
+    # this NIC to discover the G1; it is NOT the robot's IP. Empty = auto-detect.
+    net_iface: str = ""
 
 
 @dataclass
