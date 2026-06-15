@@ -27,6 +27,110 @@ Success criteria:
 - Walking in front of the camera flips `/g1/human_cmd` between
   `NORMAL_OPERATION` / `SLOW_DOWN` / `STOP`.
 
+## Staged bring-up — test each part in order (DO THIS FIRST)
+
+Bring the pipeline up one layer at a time. Each stage has a single command to
+run and a clear pass check. **Do not skip ahead** — a failure is far easier to
+find in its own stage than inside the full stack. 🟢 = no robot motion (safe),
+🔴 = the robot can move (clear space, e-stop in hand, robot already STANDING).
+
+Every terminal first:
+```bash
+cd ~/Desktop/g1_slam && source /opt/ros/humble/setup.bash && source ros2_ws/install/setup.bash
+NIC=$(ip -br addr | awk '/192\.168\.123\./{print $1}')   # host iface on the robot subnet
+echo "robot NIC = ${NIC:-NOT FOUND — is the G1 connected?}"
+```
+
+### Stage 0 — Build 🟢
+```bash
+cd ~/Desktop/g1_slam/ros2_ws && colcon build --packages-select g1_detection g1_bringup g1_robot && source install/setup.bash
+```
+**Pass:** build finishes with no errors.
+
+### Stage 1 — Locomotion wrapper (no camera) 🔴
+Validates `robot_node → g1.py → Move()`. Stand the robot first (remote, or the
+`g1_loco_client_example` StandUp).
+```bash
+# terminal A
+ros2 run g1_robot robot_node --ros-args -p net_iface:=$NIC
+# terminal B — make it take one step, then stop
+ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}}"
+ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.0}}"
+```
+**Pass:** terminal A logs `Connected via DDS` (NOT `[G1 STUB]`) and the robot takes a real step on the first publish.
+**If it fails:** `[G1 STUB]` = SDK import/connection problem; no step but not stub = robot not in a walking-ready stance (re-stand it).
+
+### Stage 2 — Blind autonomous nav (no camera) 🔴
+Validates `odom_bridge` + Nav2 + `robot_node` together. Goals in the **`map`** frame.
+```bash
+# terminal A
+ros2 launch g1_bringup nav_tier3.launch.py net_iface:=$NIC
+# terminal B — check odom + TF before sending a goal
+ros2 run tf2_ros tf2_echo map pelvis          # should print a moving transform
+#   (watch terminal A for "Odom source = sportmodestate | imu+cmd_vel | cmd_vel")
+# terminal B — short goal, 1 m ahead
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+  "{pose: {header: {frame_id: 'map'}, pose: {position: {x: 1.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}}" --feedback
+```
+**Pass:** robot walks ~1 m forward and stops near the goal.
+**If it fails:** no `/cmd_vel` → Nav2 lifecycle didn't activate (watch the `manage_nodes` call ~12 s in); walks but never stops → odom drift, check the `Odom source` log.
+
+### Stage 3 — Camera stream (no robot) 🟢
+```bash
+ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
+# new terminal
+ros2 topic hz /zed/zed_node/rgb/color/rect/image
+ros2 topic hz /zed/zed_node/depth/depth_registered
+```
+**Pass:** both report a steady ~15–30 Hz. (Full setup/troubleshooting: [ZED2_TEST.md](ZED2_TEST.md).)
+
+### Stage 4 — Human detection (no robot) 🟢
+Validates YOLO → `/g1/human_cmd` against the live ZED (with Stage 3 still running).
+```bash
+ros2 run g1_detection detection_node --ros-args \
+  -p model_path:=yolo26n.pt \
+  -p color_topic:=/zed/zed_node/rgb/color/rect/image \
+  -p depth_topic:=/zed/zed_node/depth/depth_registered \
+  -p camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info \
+  -p camera_frame:=zed_left_camera_frame
+# new terminal
+ros2 topic echo /g1/human_cmd
+```
+**Pass:** the command flips `NORMAL_OPERATION → SLOW_DOWN → STOP` as you walk toward the camera (thresholds in [ZED2_TEST.md](ZED2_TEST.md) §4).
+
+### Stage 5 — Camera localization + TF (no robot) 🟢
+Brings up the full perception stack, no motion. Pick your odom source:
+```bash
+USE_ZED_ODOM=1 ./run_zed_e2e.sh      # ZED VIO + area memory   (or omit for RTAB-Map)
+# in a sourced shell:
+ros2 run tf2_tools view_frames        # opens frames.pdf
+ros2 run tf2_ros tf2_echo map pelvis  # should be stable, not jumping wildly
+ros2 topic echo /rtabmap/odom         # odom updates as you move the camera
+```
+**Pass:** `view_frames` shows **one** tree `map → odom → … → pelvis` (no frame with two parents), and `map→pelvis` is stable.
+**If it fails:** two `map→odom` publishers or a broken chain → this is the #1 cause of "robot won't navigate" later. Fix here before Stage 6.
+
+### Stage 6 — Nav2 produces velocity + human cloud (no robot) 🟢
+Same stack as Stage 5. Goals in the **`odom`** frame (rolling costmap).
+```bash
+ros2 topic hz /cmd_vel                 # start watching
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+  "{pose: {header: {frame_id: 'odom'}, pose: {position: {x: 2.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}}" --feedback
+ros2 topic echo /human_obstacle_cloud --once   # PointCloud2 when a person is in view
+```
+**Pass:** `/cmd_vel` publishes ~20 Hz toward the goal; `/human_obstacle_cloud` is a `PointCloud2` when someone is present. (Costmap injection of that cloud stays disabled — see §7.)
+
+### Stage 7 — Full end-to-end (camera + robot) 🔴
+Everything together. Short goal, clear space, e-stop ready, robot STANDING.
+```bash
+WITH_ROBOT=1 NET_IFACE=$NIC USE_ZED_ODOM=1 ./run_zed_e2e.sh
+# in a sourced shell — short goal in 'odom':
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+  "{pose: {header: {frame_id: 'odom'}, pose: {position: {x: 2.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}}" --feedback
+# watch: ros2 topic echo /g1/human_cmd     ros2 topic hz /cmd_vel
+```
+**Pass:** robot walks toward the goal and **halts when you step into its path, resumes when you clear** (stop-for-humans). Reaching the goal cleanly depends on how well ZED VIO tracks the walking robot — that's the part you tune.
+
 ## 1. One-shot launcher (recommended)
 
 ```bash

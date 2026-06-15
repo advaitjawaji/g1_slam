@@ -140,6 +140,22 @@ local_costmap:
           raytrace_min_range: 0.0
           obstacle_max_range: 4.5
           obstacle_min_range: 0.0
+        # ── Predictive human obstacles — DISABLED pending coordinate check ──
+        # human_obstacle_node republishes /humans/markers as a PointCloud2.
+        # To enable: set `observation_sources: depth humans` above and uncomment.
+        # ⚠️ First confirm detection_node places humans correctly in the map
+        # frame (Y-up vs Z-up — see human_obstacle_node.py header), else this
+        # marks obstacles in the wrong spot. Reactive STOP (/g1/human_cmd) is
+        # unaffected and works without this.
+        # humans:
+        #   topic: /human_obstacle_cloud
+        #   data_type: "PointCloud2"
+        #   max_obstacle_height: 2.0
+        #   min_obstacle_height: 0.1
+        #   clearing: false
+        #   marking: true
+        #   obstacle_max_range: 6.0
+        #   obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -175,6 +191,18 @@ global_costmap:
           marking: true
           raytrace_max_range: 5.0
           obstacle_max_range: 4.5
+        # ── Predictive human obstacles — DISABLED pending coordinate check ──
+        # See local_costmap above and human_obstacle_node.py header. To enable:
+        # set `observation_sources: depth humans` and uncomment.
+        # humans:
+        #   topic: /human_obstacle_cloud
+        #   data_type: "PointCloud2"
+        #   max_obstacle_height: 2.0
+        #   min_obstacle_height: 0.1
+        #   clearing: false
+        #   marking: true
+        #   obstacle_max_range: 6.0
+        #   obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0

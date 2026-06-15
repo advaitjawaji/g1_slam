@@ -13,6 +13,23 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 WS_DIR="$REPO_DIR/ros2_ws"
 SESSION=g1_zed
 
+# Drive the real G1? OFF by default so this stays a perception-only test and
+# never surprise-walks the robot. Enable explicitly:
+#   WITH_ROBOT=1 NET_IFACE=enp4s0 ./run_zed_e2e.sh
+# Robot must already be STANDING (robot_node does not auto-stand). e-stop ready.
+WITH_ROBOT="${WITH_ROBOT:-0}"
+NET_IFACE="${NET_IFACE:-}"
+
+# Localization source. Default = RTAB-Map visual odometry (RGB-D SLAM).
+# USE_ZED_ODOM=1 instead uses the ZED 2i's own visual-inertial odometry (VIO)
+# + area memory (loop closure), which is smoother/IMU-fused and may track the
+# walking G1 better. It disables RTAB-Map and relays ZED odom onto the topic
+# Nav2 already reads (/rtabmap/odom), so nav2_params_hw.yaml is untouched.
+#   USE_ZED_ODOM=1 ./run_zed_e2e.sh
+# ⚠️ First lab run: verify the TF chain is a single tree map->odom->...->pelvis
+#    with `ros2 run tf2_tools view_frames`; set the real ZED->pelvis mount offset.
+USE_ZED_ODOM="${USE_ZED_ODOM:-0}"
+
 # ── Helpers ───────────────────────────────────────────────────────────────
 SOURCE_CMD="cd $REPO_DIR && source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.bash && export LD_LIBRARY_PATH=/usr/local/cuda-13.0/targets/x86_64-linux/lib:\$LD_LIBRARY_PATH"
 
@@ -26,12 +43,22 @@ if [[ "${1:-}" == "stop" ]]; then
     pkill -f static_transform_publisher || true
     pkill -f robot_state_publisher || true
     pkill -f detection_node || true
+    pkill -f human_obstacle_node || true
+    pkill -f robot_node || true
+    pkill -f "relay /zed/zed_node/odom" || true
     echo "Stopped."
     exit 0
 fi
 
 # ── Deps ──────────────────────────────────────────────────────────────────
 command -v tmux >/dev/null || { echo "Installing tmux..."; sudo apt install -y tmux; }
+
+# ZED-odom mode relays ZED VIO onto /rtabmap/odom via topic_tools relay.
+if [[ "$USE_ZED_ODOM" == "1" ]]; then
+    ( source /opt/ros/humble/setup.bash 2>/dev/null; \
+      ros2 pkg executables topic_tools 2>/dev/null | grep -q relay ) \
+      || { echo "Installing ros-humble-topic-tools (ZED-odom relay)..."; sudo apt install -y ros-humble-topic-tools; }
+fi
 
 URDF_PATH="$(source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.bash 2>/dev/null && ros2 pkg prefix g1_description 2>/dev/null)/share/g1_description/urdf/g1_29dof.urdf"
 NAV2_PARAMS="$(source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.bash 2>/dev/null && ros2 pkg prefix g1_bringup 2>/dev/null)/share/g1_bringup/config/nav2_params_hw.yaml"
@@ -45,9 +72,28 @@ echo "  G1 ZED end-to-end test"
 echo "  Repo:        $REPO_DIR"
 echo "  URDF:        $URDF_PATH"
 echo "  Nav2 params: $NAV2_PARAMS"
+if [[ "$WITH_ROBOT" == "1" ]]; then
+    echo "  Robot:       DRIVING (robot_node, iface='${NET_IFACE:-auto}') — robot must be STANDING, e-stop ready"
+else
+    echo "  Robot:       perception-only (no robot_node). Enable: WITH_ROBOT=1 NET_IFACE=<nic> $0"
+fi
+if [[ "$USE_ZED_ODOM" == "1" ]]; then
+    echo "  Odometry:    ZED 2i VIO + area memory (RTAB-Map OFF) — verify TF with: ros2 run tf2_tools view_frames"
+else
+    echo "  Odometry:    RTAB-Map VO. Use ZED VIO instead: USE_ZED_ODOM=1 $0"
+fi
 echo "============================================================"
 echo "Starting in 2 s (Ctrl+C to cancel)..."
 sleep 2
+
+# ── Localization mode → ZED launch args + which node owns map->odom ─────────
+if [[ "$USE_ZED_ODOM" == "1" ]]; then
+    # ZED owns map->odom->base (VIO + area memory). publish_map_tf gives map->odom.
+    ZED_TRACK_ARGS="pos_tracking.pos_tracking_enabled:=true pos_tracking.area_memory:=true pos_tracking.publish_tf:=true pos_tracking.publish_map_tf:=true"
+else
+    # RTAB-Map owns map->odom + odom->base; ZED tracking stays off.
+    ZED_TRACK_ARGS="pos_tracking.pos_tracking_enabled:=false"
+fi
 
 # ── tmux layout: 2 windows ────────────────────────────────────────────────
 #  Window 'core'   : zed | rtabmap | detection | nav2     (4 panes)
@@ -60,11 +106,19 @@ tmux split-window -v -t $SESSION:core.2
 
 # Pane 0 - ZED
 tmux send-keys -t $SESSION:core.0 \
-    "$SOURCE_CMD && echo '=== ZED ===' && ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i pos_tracking.pos_tracking_enabled:=false" Enter
+    "$SOURCE_CMD && echo '=== ZED ===' && ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i $ZED_TRACK_ARGS" Enter
 
-# Pane 1 - RTAB-Map (wait for ZED topics)
-tmux send-keys -t $SESSION:core.1 \
-    "$SOURCE_CMD && sleep 10 && echo '=== RTAB-MAP ===' && ros2 launch rtabmap_launch rtabmap.launch.py rgb_topic:=/zed/zed_node/rgb/color/rect/image depth_topic:=/zed/zed_node/depth/depth_registered camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info frame_id:=zed_camera_link approx_sync:=true approx_sync_max_interval:=0.02 qos:=2 rtabmap_viz:=false rviz:=false" Enter
+# Pane 1 - odom source: RTAB-Map VO (default) OR a relay of ZED VIO odom
+if [[ "$USE_ZED_ODOM" == "1" ]]; then
+    # ZED VIO owns map->odom->base_link->zed_camera_link (->pelvis via static TF).
+    # Relay ZED odom onto /rtabmap/odom so Nav2's odom_topic stays unchanged.
+    # Needs ros-humble-topic-tools.
+    tmux send-keys -t $SESSION:core.1 \
+        "$SOURCE_CMD && sleep 12 && echo '=== ZED-VIO ODOM (RTAB-Map OFF; relay ZED odom -> /rtabmap/odom) ===' && ros2 run topic_tools relay /zed/zed_node/odom /rtabmap/odom" Enter
+else
+    tmux send-keys -t $SESSION:core.1 \
+        "$SOURCE_CMD && sleep 10 && echo '=== RTAB-MAP ===' && ros2 launch rtabmap_launch rtabmap.launch.py rgb_topic:=/zed/zed_node/rgb/color/rect/image depth_topic:=/zed/zed_node/depth/depth_registered camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info frame_id:=zed_camera_link approx_sync:=true approx_sync_max_interval:=0.02 qos:=2 rtabmap_viz:=false rviz:=false" Enter
+fi
 
 # Pane 2 - Detection
 tmux send-keys -t $SESSION:core.2 \
@@ -96,6 +150,21 @@ tmux send-keys -t $SESSION:extras.2 \
 tmux send-keys -t $SESSION:extras.3 \
     "$SOURCE_CMD && sleep 18 && echo '=== MONITOR ===' && echo 'Commands:' && echo '  ros2 topic hz /cmd_vel' && echo '  ros2 topic echo /g1/human_cmd' && echo '  ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose ...' && bash" Enter
 
+# ── Window 'ctrl' : human-obstacle injector (+ optional robot driver) ──────
+tmux new-window -t $SESSION -n ctrl
+
+# Pane 0 - human_obstacle_node : /humans/markers -> /human_obstacle_cloud
+#          (perception only, always on; costmap source is still opt-in in YAML)
+tmux send-keys -t $SESSION:ctrl.0 \
+    "$SOURCE_CMD && sleep 14 && echo '=== HUMAN OBSTACLE (PointCloud2) ===' && ros2 run g1_detection human_obstacle_node" Enter
+
+if [[ "$WITH_ROBOT" == "1" ]]; then
+    tmux split-window -v -t $SESSION:ctrl.0
+    # Pane 1 - robot_node : drives the real G1 from /cmd_vel.
+    tmux send-keys -t $SESSION:ctrl.1 \
+        "$SOURCE_CMD && sleep 8 && echo '=== ROBOT NODE — DRIVES THE G1 (robot must be STANDING, e-stop ready) ===' && ros2 run g1_robot robot_node --ros-args -p net_iface:=$NET_IFACE" Enter
+fi
+
 # Focus core window
 tmux select-window -t $SESSION:core
 
@@ -105,6 +174,9 @@ echo "Stop with:      ./run_zed_e2e.sh stop"
 echo ""
 echo "Send a goal (from any sourced shell):"
 echo "  ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \"{pose: {header: {frame_id: 'odom'}, pose: {position: {x: 3.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}}\" --feedback"
+echo ""
+echo "Drive the real robot:  WITH_ROBOT=1 NET_IFACE=<nic> ./run_zed_e2e.sh   (default: perception-only)"
+echo "ZED VIO for odometry:  USE_ZED_ODOM=1 ./run_zed_e2e.sh                 (default: RTAB-Map odom)"
 echo ""
 
 # Auto-attach if interactive
