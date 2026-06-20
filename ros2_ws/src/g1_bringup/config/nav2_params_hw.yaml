@@ -14,7 +14,7 @@ bt_navigator:
     use_sim_time: false
     global_frame: odom
     robot_base_frame: pelvis
-    odom_topic: /rtabmap/odom
+    odom_topic: /odom        # ZED VIO odom (remapped from /zed/zed_node/odom in hardware.launch.py)
     bt_loop_duration: 10
     default_server_timeout: 20
     default_nav_to_pose_bt_xml: "/opt/ros/humble/share/nav2_bt_navigator/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml"
@@ -81,7 +81,7 @@ controller_server:
     general_goal_checker:
       stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.30
+      xy_goal_tolerance: 0.10
       yaw_goal_tolerance: 0.50    # end roughly facing the goal; loose enough to avoid loops
 
     FollowPath:

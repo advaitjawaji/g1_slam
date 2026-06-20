@@ -21,13 +21,15 @@ WITH_ROBOT="${WITH_ROBOT:-0}"
 NET_IFACE="${NET_IFACE:-}"
 
 # Localization source. Default = RTAB-Map visual odometry (RGB-D SLAM).
-# USE_ZED_ODOM=1 instead uses the ZED 2i's own visual-inertial odometry (VIO)
-# + area memory (loop closure), which is smoother/IMU-fused and may track the
-# walking G1 better. It disables RTAB-Map and relays ZED odom onto the topic
-# Nav2 already reads (/rtabmap/odom), so nav2_params_hw.yaml is untouched.
+# USE_ZED_ODOM=1 instead uses the ZED 2i's own visual-inertial odometry (VIO),
+# smoother/IMU-fused and better at tracking the walking G1. It disables RTAB-Map
+# and relays ZED odom onto /odom (Nav2's odom_topic in nav2_params_hw.yaml).
+# Both modes now navigate in the `odom` frame — no map frame is published.
 #   USE_ZED_ODOM=1 ./run_zed_e2e.sh
-# ⚠️ First lab run: verify the TF chain is a single tree map->odom->...->pelvis
-#    with `ros2 run tf2_tools view_frames`; set the real ZED->pelvis mount offset.
+# ⚠️ First lab run: verify the TF chain is a single tree odom->zed_camera_link->
+#    pelvis with `ros2 run tf2_tools view_frames` (no frame with two parents),
+#    and that the static ZED->pelvis mount offset matches the real hardware.
+#    In RViz set Fixed Frame = `odom` (there is no `map` frame in this wiring).
 USE_ZED_ODOM="${USE_ZED_ODOM:-0}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -78,9 +80,9 @@ else
     echo "  Robot:       perception-only (no robot_node). Enable: WITH_ROBOT=1 NET_IFACE=<nic> $0"
 fi
 if [[ "$USE_ZED_ODOM" == "1" ]]; then
-    echo "  Odometry:    ZED 2i VIO + area memory (RTAB-Map OFF) — verify TF with: ros2 run tf2_tools view_frames"
+    echo "  Odometry:    ZED 2i VIO -> /odom (RTAB-Map OFF, odom-frame nav, no map) — verify: ros2 run tf2_tools view_frames"
 else
-    echo "  Odometry:    RTAB-Map VO. Use ZED VIO instead: USE_ZED_ODOM=1 $0"
+    echo "  Odometry:    RTAB-Map VO -> /odom. Use ZED VIO instead: USE_ZED_ODOM=1 $0"
 fi
 echo "============================================================"
 echo "Starting in 2 s (Ctrl+C to cancel)..."
@@ -88,11 +90,15 @@ sleep 2
 
 # ── Localization mode → ZED launch args + which node owns map->odom ─────────
 if [[ "$USE_ZED_ODOM" == "1" ]]; then
-    # ZED owns map->odom->base (VIO + area memory). publish_map_tf gives map->odom.
-    ZED_TRACK_ARGS="pos_tracking.pos_tracking_enabled:=true pos_tracking.area_memory:=true pos_tracking.publish_tf:=true pos_tracking.publish_map_tf:=true"
+    # ZED VIO owns odom->zed_camera_link (pos_tracking on via config default;
+    # the wrapper has no base_frame param, so odom is always referenced to
+    # zed_camera_link). No map frame: we navigate in `odom` (nav2_params_hw
+    # global_frame=odom), so publish_map_tf:=false. publish_tf:=true emits the
+    # odom->camera TF. (publish_tf/publish_map_tf are the only valid launch args.)
+    ZED_TRACK_ARGS="publish_tf:=true publish_map_tf:=false"
 else
-    # RTAB-Map owns map->odom + odom->base; ZED tracking stays off.
-    ZED_TRACK_ARGS="pos_tracking.pos_tracking_enabled:=false"
+    # RTAB-Map owns odom->base + map->odom; keep ZED from publishing any TF.
+    ZED_TRACK_ARGS="publish_tf:=false"
 fi
 
 # ── tmux layout: 2 windows ────────────────────────────────────────────────
@@ -110,14 +116,15 @@ tmux send-keys -t $SESSION:core.0 \
 
 # Pane 1 - odom source: RTAB-Map VO (default) OR a relay of ZED VIO odom
 if [[ "$USE_ZED_ODOM" == "1" ]]; then
-    # ZED VIO owns map->odom->base_link->zed_camera_link (->pelvis via static TF).
-    # Relay ZED odom onto /rtabmap/odom so Nav2's odom_topic stays unchanged.
-    # Needs ros-humble-topic-tools.
+    # ZED VIO owns odom->zed_camera_link (->pelvis via the static TF below).
+    # Relay ZED odom onto /odom — the topic Nav2 reads (nav2_params_hw
+    # odom_topic: /odom). Needs ros-humble-topic-tools.
     tmux send-keys -t $SESSION:core.1 \
-        "$SOURCE_CMD && sleep 12 && echo '=== ZED-VIO ODOM (RTAB-Map OFF; relay ZED odom -> /rtabmap/odom) ===' && ros2 run topic_tools relay /zed/zed_node/odom /rtabmap/odom" Enter
+        "$SOURCE_CMD && sleep 12 && echo '=== ZED-VIO ODOM (RTAB-Map OFF; relay ZED odom -> /odom) ===' && ros2 run topic_tools relay /zed/zed_node/odom /odom" Enter
 else
+    # RTAB-Map publishes odometry directly on /odom (Nav2's odom_topic).
     tmux send-keys -t $SESSION:core.1 \
-        "$SOURCE_CMD && sleep 10 && echo '=== RTAB-MAP ===' && ros2 launch rtabmap_launch rtabmap.launch.py rgb_topic:=/zed/zed_node/rgb/color/rect/image depth_topic:=/zed/zed_node/depth/depth_registered camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info frame_id:=zed_camera_link approx_sync:=true approx_sync_max_interval:=0.02 qos:=2 rtabmap_viz:=false rviz:=false" Enter
+        "$SOURCE_CMD && sleep 10 && echo '=== RTAB-MAP (odom -> /odom) ===' && ros2 launch rtabmap_launch rtabmap.launch.py rgb_topic:=/zed/zed_node/rgb/color/rect/image depth_topic:=/zed/zed_node/depth/depth_registered camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info frame_id:=zed_camera_link odom_topic:=/odom approx_sync:=true approx_sync_max_interval:=0.02 qos:=2 rtabmap_viz:=false rviz:=false" Enter
 fi
 
 # Pane 2 - Detection
@@ -134,9 +141,12 @@ tmux split-window -h -t $SESSION:extras
 tmux split-window -v -t $SESSION:extras.0
 tmux split-window -v -t $SESSION:extras.2
 
-# Pane 0 - static TF pelvis
+# Pane 0 - static TF: ZED head mount (zed_camera_link -> pelvis).
+# Cam is 5cm fwd / 40cm up / ~17.5° down from pelvis; these are the INVERSE
+# (camera->pelvis) values: t = -Ry(-0.3054)*(0.05,0,0.40) = (0.0726,0,-0.3965),
+# rot pitch -0.3054. Must match hardware.launch.py zed_to_pelvis_tf.
 tmux send-keys -t $SESSION:extras.0 \
-    "$SOURCE_CMD && sleep 6 && echo '=== STATIC TF ===' && ros2 run tf2_ros static_transform_publisher --x 0 --y 0 --z 0 --yaw 0 --pitch 0 --roll 0 --frame-id zed_camera_link --child-frame-id pelvis" Enter
+    "$SOURCE_CMD && sleep 6 && echo '=== STATIC TF (zed_camera_link -> pelvis) ===' && ros2 run tf2_ros static_transform_publisher --x 0.0726 --y 0.0 --z -0.3965 --yaw 0 --pitch -0.3054 --roll 0 --frame-id zed_camera_link --child-frame-id pelvis" Enter
 
 # Pane 1 - robot_state_publisher
 tmux send-keys -t $SESSION:extras.1 \

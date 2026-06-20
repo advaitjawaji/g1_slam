@@ -95,11 +95,22 @@ def generate_launch_description():
         name="zed_node",
         namespace="zed",
         parameters=[{
-            "general.camera_model":        "zed2",
+            "general.camera_model":        "zed2i",   # this unit is a ZED 2i
             "general.grab_resolution":     "HD720",
             "general.grab_frame_rate":     30,
             "depth.depth_mode":            "ULTRA",
             "sensors.publish_imu_tf":      False,
+            # ── VIO odometry: the odom source for the whole nav stack ──────
+            # The wrapper hard-codes its base to <camera>_camera_link (there is
+            # NO base_frame param), so it publishes `odom -> zed_camera_link`.
+            # We attach `pelvis` under it via the zed_camera_link->pelvis static
+            # TF below. publish_map_tf is OFF: we navigate in the `odom` frame
+            # (nav2_params_hw global_frame=odom).
+            # NOTE: this bare node does NOT load common_stereo.yaml — every
+            # non-default setting must be listed here.
+            "pos_tracking.pos_tracking_enabled":  True,
+            "pos_tracking.publish_tf":            True,
+            "pos_tracking.publish_map_tf":        False,
         }],
         remappings=[
             ("zed_node/rgb/image_rect_color",        "/camera/color/image_raw"),
@@ -107,18 +118,29 @@ def generate_launch_description():
             ("zed_node/depth/depth_registered",      "/camera/aligned_depth_to_color/image_raw"),
             ("zed_node/point_cloud/cloud_registered", "/camera/depth/points"),
             ("zed_node/imu/data",                    "/imu_in_torso/data"),
+            ("zed_node/odom",                        "/odom"),
         ],
         condition=IfCondition(use_zed),
     )
 
-    # ZED camera frame → d435_link static TF (so SLAM uses our URDF frame)
-    # Adjust xyz/rpy to match physical ZED mount position on G1
+    # Physical ZED mount: head, 5 cm in front of and 40 cm above the pelvis,
+    # pitched ~17.5° (0.3054 rad) DOWN. The wrapper publishes odom->zed_camera_link,
+    # so zed_camera_link is the PARENT and pelvis hangs under it (pelvis is the
+    # URDF root, free to take a parent). This also replaces the old
+    # zed_left_camera_frame->d435_link alias, which double-parented d435_link.
+    #
+    # These are the INVERSE of the intuitive pelvis->camera mount
+    # (cam at +0.05,0,+0.40 level, pitch +0.3054), because we publish camera->pelvis:
+    #   R = Ry(-0.3054);  t = -R * (0.05,0,0.40) = (0.0726, 0, -0.3965)
+    # Args order: x y z yaw pitch roll parent child.
+    # TODO: refine pitch once measured (you estimated 15-20°); if you change it,
+    # recompute t (or split into camera->level->pelvis statics).
     zed_tf = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
-        name="zed_to_d435_tf",
-        arguments=["0", "0", "0", "0", "0", "0",
-                   "zed_left_camera_frame", "d435_link"],
+        name="zed_to_pelvis_tf",
+        arguments=["0.0726", "0.0", "-0.3965", "0", "-0.3054", "0",
+                   "zed_camera_link", "pelvis"],
         condition=IfCondition(use_zed),
     )
 
@@ -150,8 +172,14 @@ def generate_launch_description():
                 "model_path":   model_path,
                 "conf":         0.25,
                 "imgsz":        384,
-                "camera_frame": "d435_link",
-                "map_frame":    "map",
+                # ZED path uses the camera's own frame (d435_link alias removed);
+                # RealSense path keeps the URDF mount frame.
+                "camera_frame": PythonExpression(
+                    ["'zed_left_camera_frame' if '", camera, "' == 'zed' else 'd435_link'"]),
+                # Nav runs in the `odom` frame (no global map); publish detections
+                # there so they match the costmaps. Falls back to camera frame if
+                # odom isn't up yet.
+                "map_frame":    "odom",
             }],
         )],
     )
@@ -165,7 +193,7 @@ def generate_launch_description():
             name="human_obstacle_node",
             output="screen",
             parameters=[{
-                "map_frame":                "map",
+                "map_frame":                "odom",   # odom-frame nav (no global map)
                 "prediction_horizon_steps": 10,
             }],
         )],

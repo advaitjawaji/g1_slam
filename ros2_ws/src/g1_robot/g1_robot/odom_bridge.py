@@ -121,9 +121,9 @@ class OdomBridge(Node):
                 if bool(self.get_parameter("init_channel_factory").value):
                     iface = self.get_parameter("net_iface").value
                     if iface:
-                        ChannelFactory.Instance().Init(0, iface)
+                        ChannelFactory().Init(0, iface)
                     else:
-                        ChannelFactory.Instance().Init(0)
+                        ChannelFactory().Init(0)
 
                 sport_topic = self.get_parameter("sportstate_topic").value
                 self._sport_sub = ChannelSubscriber(sport_topic, SportModeState_)

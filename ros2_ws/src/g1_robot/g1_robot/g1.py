@@ -37,9 +37,9 @@ class G1Robot(RobotInterface):
             # 2nd arg is the host NIC name (e.g. "enp4s0"), NOT the robot IP.
             # Empty string → let the SDK auto-detect the interface.
             if config.net_iface:
-                ChannelFactory.Instance().Init(0, config.net_iface)
+                ChannelFactory().Init(0, config.net_iface)
             else:
-                ChannelFactory.Instance().Init(0)
+                ChannelFactory().Init(0)
             self._client = LocoClient()
             self._client.SetTimeout(10.0)
             self._client.Init()
