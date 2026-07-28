@@ -32,11 +32,37 @@ NET_IFACE="${NET_IFACE:-}"
 #    In RViz set Fixed Frame = `odom` (there is no `map` frame in this wiring).
 USE_ZED_ODOM="${USE_ZED_ODOM:-0}"
 
+# Demo overlay: egocentric ZED video annotated with Human_dtp bounding boxes,
+# human trajectory forecasts, the Nav2 plan and the path actually walked. Writes
+# an MP4 per run. Off with OVERLAY=0; recording off with RECORD=0.
+#   DEMO_DIR=~/demos ./run_zed_e2e.sh
+# View live:  ros2 run rqt_image_view rqt_image_view /g1/overlay/image
+OVERLAY="${OVERLAY:-1}"
+RECORD="${RECORD:-1}"
+DEMO_DIR="${DEMO_DIR:-$HOME/g1_demos}"
+
 # ── Helpers ───────────────────────────────────────────────────────────────
 SOURCE_CMD="cd $REPO_DIR && source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.bash && export LD_LIBRARY_PATH=/usr/local/cuda-13.0/targets/x86_64-linux/lib:\$LD_LIBRARY_PATH"
 
 # ── stop ──────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "stop" ]]; then
+    # ORDER MATTERS. The MP4 is only finalised when overlay_node runs its
+    # shutdown handler, so it must be SIGINT'd and given time to exit BEFORE
+    # tmux kill-session SIGHUPs every pane. Killing the session first leaves an
+    # unplayable file.
+    if pgrep -f overlay_node >/dev/null 2>&1; then
+        echo "Flushing demo video..."
+        pkill -INT -f overlay_node || true
+        for _ in $(seq 1 40); do            # up to 8 s
+            pgrep -f overlay_node >/dev/null 2>&1 || break
+            sleep 0.2
+        done
+        pgrep -f overlay_node >/dev/null 2>&1 \
+            && { echo "  overlay_node did not exit; forcing (MP4 may be truncated)."; \
+                 pkill -KILL -f overlay_node || true; } \
+            || echo "  done."
+    fi
+
     tmux kill-session -t $SESSION 2>/dev/null || true
     pkill -f zed_wrapper || true
     pkill -f rtabmap || true
@@ -129,7 +155,7 @@ fi
 
 # Pane 2 - Detection
 tmux send-keys -t $SESSION:core.2 \
-    "$SOURCE_CMD && sleep 12 && echo '=== DETECTION ===' && ros2 run g1_detection detection_node --ros-args -p model_path:=yolo26n.pt -p color_topic:=/zed/zed_node/rgb/color/rect/image -p depth_topic:=/zed/zed_node/depth/depth_registered -p camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info -p camera_frame:=zed_left_camera_frame" Enter
+    "$SOURCE_CMD && sleep 12 && echo '=== DETECTION ===' && ros2 run g1_detection detection_node --ros-args -p model_path:=yolo26n.pt -p color_topic:=/zed/zed_node/rgb/color/rect/image -p depth_topic:=/zed/zed_node/depth/depth_registered -p camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info -p camera_frame:=zed_left_camera_frame -p world_frame:=odom" Enter
 
 # Pane 3 - Nav2 + auto-activate
 tmux send-keys -t $SESSION:core.3 \
@@ -175,6 +201,18 @@ if [[ "$WITH_ROBOT" == "1" ]]; then
         "$SOURCE_CMD && sleep 8 && echo '=== ROBOT NODE — DRIVES THE G1 (robot must be STANDING, e-stop ready) ===' && ros2 run g1_robot robot_node --ros-args -p net_iface:=$NET_IFACE" Enter
 fi
 
+# ── Window 'demo' : the annotated egocentric video ────────────────────────
+if [[ "$OVERLAY" == "1" ]]; then
+    mkdir -p "$DEMO_DIR"
+    DEMO_MP4="$DEMO_DIR/g1_demo_$(date +%Y%m%d_%H%M%S).mp4"
+    tmux new-window -t $SESSION -n demo
+    # Starts after detection so intrinsics + the first /g1/detections have
+    # landed; it renders regardless, so a late detector just means the opening
+    # seconds have no boxes.
+    tmux send-keys -t $SESSION:demo.0 \
+        "$SOURCE_CMD && sleep 16 && echo '=== DEMO OVERLAY ===' && ros2 run g1_detection overlay_node --ros-args -p color_topic:=/zed/zed_node/rgb/color/rect/image -p camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info -p world_frame:=odom -p base_frame:=pelvis -p record:=$([[ "$RECORD" == "1" ]] && echo true || echo false) -p record_path:=$DEMO_MP4" Enter
+fi
+
 # Focus core window
 tmux select-window -t $SESSION:core
 
@@ -188,6 +226,16 @@ echo ""
 echo "Drive the real robot:  WITH_ROBOT=1 NET_IFACE=<nic> ./run_zed_e2e.sh   (default: perception-only)"
 echo "ZED VIO for odometry:  USE_ZED_ODOM=1 ./run_zed_e2e.sh                 (default: RTAB-Map odom)"
 echo ""
+if [[ "$OVERLAY" == "1" ]]; then
+    echo "Demo overlay:          window 'demo'  (tmux select-window -t $SESSION:demo)"
+    echo "  watch live:          ros2 run rqt_image_view rqt_image_view /g1/overlay/image"
+    if [[ "$RECORD" == "1" ]]; then
+        echo "  recording to:        $DEMO_MP4"
+        echo "  IMPORTANT:           stop with './run_zed_e2e.sh stop' so the MP4 is flushed."
+    fi
+    echo "  disable:             OVERLAY=0 ./run_zed_e2e.sh   (or RECORD=0 to view without saving)"
+    echo ""
+fi
 
 # Auto-attach if interactive
 if [[ -t 1 ]]; then

@@ -106,6 +106,8 @@ Ported from the [Human_dtp](../Human_dtp) MiR AMR detection system, adapted for 
 | `detection.py` | `HumanXZPredictor` — YOLO + depth + Kalman tracking + trajectory prediction |
 | `detection_node.py` | ROS2 node wrapping the detector: subscribes to camera, publishes markers |
 | `human_obstacle_node.py` | Converts human positions to Nav2 costmap obstacles |
+| `overlay_render.py` | Pure cv2/numpy renderer for the demo video (no ROS import) |
+| `overlay_node.py` | Demo overlay: annotated egocentric video + MP4 — see [DEMO_VIDEO.md](DEMO_VIDEO.md) |
 | `eigen.py` | EigenTrajectory adapter (learned trajectory prediction, disabled by default) |
 | `preprocessing.py` | Depth frame temporal smoothing |
 
@@ -121,6 +123,11 @@ Ported from the [Human_dtp](../Human_dtp) MiR AMR detection system, adapted for 
 - `/humans/markers` — `visualization_msgs/MarkerArray` of current positions (red cylinders) and predicted trajectories (green lines)
 - `/g1/human_cmd` — `std_msgs/String` of `STOP`, `SLOW_DOWN`, or `NORMAL_OPERATION`
 - `/human_obstacle_cloud` — `sensor_msgs/PointCloud` of human positions for Nav2 obstacle layer
+- `/g1/detections` — `std_msgs/String` (JSON): full per-frame result — bounding
+  boxes, track IDs, world positions, forecast trajectories, stamped with the
+  source frame. Consumed by `overlay_node` so the demo video shows exactly the
+  detections the avoidance logic acted on, with no second YOLO pass.
+- `/g1/overlay/image` (+ `/compressed`) — the annotated demo video
 
 **Avoidance thresholds (configurable in detection_node params):**
 

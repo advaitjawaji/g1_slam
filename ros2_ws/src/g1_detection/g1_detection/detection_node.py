@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import numpy as np
 import cv2
@@ -34,6 +35,15 @@ class DetectionNode(Node):
         self.declare_parameter("imgsz", 384)
         self.declare_parameter("camera_frame", "d435_link")
         self.declare_parameter("map_frame", "map")
+        # World frame the overlay projects in. Nav2 (nav2_params_hw.yaml) uses
+        # global_frame `odom` on hardware, and the ZED-VIO wiring publishes no
+        # `map` frame at all — so this defaults to odom, independent of
+        # `map_frame` above which the legacy marker path still uses.
+        self.declare_parameter("world_frame", "odom")
+        # Camera OPTICAL frame, normally taken from camera_info's header.frame_id.
+        # Override only if that frame is missing from the TF tree; an empty
+        # string keeps the auto-detected value.
+        self.declare_parameter("optical_frame", "")
         # Camera topic names — overridable so a RealSense/ZED naming mismatch
         # is a launch arg, not a code edit. Check `ros2 topic list | grep camera`.
         self.declare_parameter("color_topic",       "/camera/color/image_raw")
@@ -45,6 +55,7 @@ class DetectionNode(Node):
         imgsz       = self.get_parameter("imgsz").value
         self._camera_frame = self.get_parameter("camera_frame").value
         self._map_frame    = self.get_parameter("map_frame").value
+        self._world_frame  = self.get_parameter("world_frame").value
         color_topic = self.get_parameter("color_topic").value
         depth_topic = self.get_parameter("depth_topic").value
         info_topic  = self.get_parameter("camera_info_topic").value
@@ -69,6 +80,12 @@ class DetectionNode(Node):
         self._fx = self._fy = self._cx = self._cy = None
         self._u_term = None   # cached (u - cx)/fx grid
         self._v_term = None   # cached (v - cy)/fy grid
+        # The frame camera_info is expressed in — this is the true OPTICAL frame
+        # (x right, y down, z forward), which is what the back-projected cloud
+        # lives in. Read from the message rather than hard-coded so a
+        # RealSense/ZED naming difference never silently skews the projection.
+        self._optical_frame: str | None = self.get_parameter("optical_frame").value or None
+        self._optical_forced = self._optical_frame is not None
 
         self.create_subscription(Image,      color_topic, self._color_cb, QOS_SENSOR)
         self.create_subscription(Image,      depth_topic, self._depth_cb, QOS_SENSOR)
@@ -79,6 +96,12 @@ class DetectionNode(Node):
 
         self._pub_markers = self.create_publisher(MarkerArray, "/humans/markers", 10)
         self._pub_cmd     = self.create_publisher(String, "/g1/human_cmd", 10)
+        # Full per-frame Human_dtp result for the demo overlay: bounding boxes,
+        # track IDs, world positions and predicted trajectories, tagged with the
+        # stamp of the exact source frame so the renderer can draw on that frame
+        # rather than on whatever arrived during inference.
+        self._pub_dets    = self.create_publisher(String, "/g1/detections", 10)
+        self._warned_no_world_tf = False
 
         self.get_logger().info("Detection node ready (waiting for camera_info).")
 
@@ -87,9 +110,11 @@ class DetectionNode(Node):
             return  # intrinsics are static — only need them once
         self._fx, self._fy = msg.k[0], msg.k[4]
         self._cx, self._cy = msg.k[2], msg.k[5]
+        if not self._optical_forced:
+            self._optical_frame = msg.header.frame_id or self._camera_frame
         self.get_logger().info(
             f"Got intrinsics: fx={self._fx:.1f} fy={self._fy:.1f} "
-            f"cx={self._cx:.1f} cy={self._cy:.1f}"
+            f"cx={self._cx:.1f} cy={self._cy:.1f} optical_frame='{self._optical_frame}'"
         )
 
     def _ensure_backproject_grid(self, h: int, w: int):
@@ -153,23 +178,33 @@ class DetectionNode(Node):
         color = np.ascontiguousarray(color)
         point_cloud_xyz = self._latest_depth
 
-        T_map_camera = self._get_camera_transform()
+        T_map_camera   = self._get_camera_transform()
+        T_world_optical = self._lookup_matrix(self._world_frame, self._optical_frame)
 
+        t_start = time.perf_counter()
         _, result = self._predictor.process_frame(
             color_frame=color,
             point_cloud_xyz=point_cloud_xyz,
             timestamp=time.time(),
             T_odom_camera=T_map_camera,
+            T_world_optical=T_world_optical,
         )
 
         self._publish_markers(result)
         self._publish_cmd(result)
+        self._publish_detections(
+            result, msg, (time.perf_counter() - t_start) * 1000.0,
+            world_ok=T_world_optical is not None,
+        )
 
-    def _get_camera_transform(self):
+    def _lookup_matrix(self, target_frame: str, source_frame: str):
+        """4x4 homogeneous transform T_target_source, or None if TF is unavailable."""
+        if not target_frame or not source_frame:
+            return None
         try:
             tf = self._tf_buffer.lookup_transform(
-                self._map_frame,
-                self._camera_frame,
+                target_frame,
+                source_frame,
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=0.05),
             )
@@ -190,6 +225,9 @@ class DetectionNode(Node):
             return T
         except Exception:
             return None
+
+    def _get_camera_transform(self):
+        return self._lookup_matrix(self._map_frame, self._camera_frame)
 
     def _publish_markers(self, result: dict):
         marker_array = MarkerArray()
@@ -242,6 +280,52 @@ class DetectionNode(Node):
                 marker_array.markers.append(path_marker)
 
         self._pub_markers.publish(marker_array)
+
+    def _publish_detections(self, result: dict, src: Image, latency_ms: float, world_ok: bool):
+        """Serialise the Human_dtp result for the overlay renderer.
+
+        JSON on a std_msgs/String keeps this dependency-free (no custom .msg
+        package to build). The payload is a few KB at most: N humans x 20
+        prediction points.
+        """
+        if not world_ok and not self._warned_no_world_tf:
+            self._warned_no_world_tf = True
+            self.get_logger().warn(
+                f"No TF '{self._world_frame}' <- '{self._optical_frame}'. Overlay will "
+                "still draw boxes, but human world tracks/predictions stay empty."
+            )
+
+        dets = []
+        for det in result.get("detections", []):
+            dets.append({
+                "id":    det["track_id"],
+                "bbox":  det["bbox_xyxy"],
+                "conf":  bool(det.get("track_confirmed", False)),
+                "dist":  det.get("distance_to_agv_m"),
+                "region": det.get("region_relative_to_agv"),
+                "cam":   det.get("position_camera_m"),
+                "world": det.get("position_world_m"),
+                # Downsample the 20-step horizon; the line reads the same at 10.
+                "pred":  [[p["x"], p["y"]] for p in det.get("predictions_world", [])][::2],
+            })
+
+        agv = result.get("agv_movement", {})
+        payload = {
+            "stamp":      {"sec": src.header.stamp.sec, "nsec": src.header.stamp.nanosec},
+            "frame_id":   src.header.frame_id,
+            "width":      src.width,
+            "height":     src.height,
+            "world_frame": self._world_frame if world_ok else None,
+            "cmd":        (agv.get("command") or "normal_operation").upper(),
+            "state":      agv.get("range_state"),
+            "closest_m":  agv.get("closest_human_depth_m"),
+            "latency_ms": round(latency_ms, 1),
+            "detections": dets,
+        }
+
+        msg = String()
+        msg.data = json.dumps(payload, separators=(",", ":"))
+        self._pub_dets.publish(msg)
 
     def _publish_cmd(self, result: dict):
         cmd = result.get("agv_movement", {}).get("command", "normal_operation")
