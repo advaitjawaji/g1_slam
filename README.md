@@ -5,6 +5,11 @@ Autonomous navigation stack for the **Unitree G1 humanoid robot** that simultane
 Built with ROS2 Humble, RTAB-Map, YOLO, and Nav2. Supports three execution modes: Genesis simulation, offline rosbag validation, and real hardware deployment.
 
 ---
+## Demo
+
+https://github.com/user-attachments/assets/31447d2a-ec57-407d-af53-1afb119e20ef
+
+The G1 navigating autonomously; a person crosses its path and it stops.
 
 ## Demo Goal
 
