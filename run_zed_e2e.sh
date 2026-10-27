@@ -33,7 +33,10 @@ NET_IFACE="${NET_IFACE:-}"
 USE_ZED_ODOM="${USE_ZED_ODOM:-0}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────
-SOURCE_CMD="cd $REPO_DIR && source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.bash && export LD_LIBRARY_PATH=/usr/local/cuda-13.0/targets/x86_64-linux/lib:\$LD_LIBRARY_PATH"
+# Ported to ROS 2 Jazzy / aarch64 (Jetson Thor). CUDA path is arch-agnostic
+# (/usr/local/cuda = JetPack symlink); was a hardcoded x86_64 path originally.
+ROS_DISTRO_NAME="${ROS_DISTRO_NAME:-jazzy}"
+SOURCE_CMD="cd $REPO_DIR && source /opt/ros/${ROS_DISTRO_NAME}/setup.bash && source $WS_DIR/install/setup.bash && export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH"
 
 # ── stop ──────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "stop" ]]; then
@@ -57,13 +60,13 @@ command -v tmux >/dev/null || { echo "Installing tmux..."; sudo apt install -y t
 
 # ZED-odom mode relays ZED VIO onto /rtabmap/odom via topic_tools relay.
 if [[ "$USE_ZED_ODOM" == "1" ]]; then
-    ( source /opt/ros/humble/setup.bash 2>/dev/null; \
+    ( source /opt/ros/${ROS_DISTRO_NAME}/setup.bash 2>/dev/null; \
       ros2 pkg executables topic_tools 2>/dev/null | grep -q relay ) \
-      || { echo "Installing ros-humble-topic-tools (ZED-odom relay)..."; sudo apt install -y ros-humble-topic-tools; }
+      || { echo "Installing ros-${ROS_DISTRO_NAME}-topic-tools (ZED-odom relay)..."; sudo apt install -y ros-${ROS_DISTRO_NAME}-topic-tools; }
 fi
 
-URDF_PATH="$(source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.bash 2>/dev/null && ros2 pkg prefix g1_description 2>/dev/null)/share/g1_description/urdf/g1_29dof.urdf"
-NAV2_PARAMS="$(source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.bash 2>/dev/null && ros2 pkg prefix g1_bringup 2>/dev/null)/share/g1_bringup/config/nav2_params_hw.yaml"
+URDF_PATH="$(source /opt/ros/${ROS_DISTRO_NAME}/setup.bash && source $WS_DIR/install/setup.bash 2>/dev/null && ros2 pkg prefix g1_description 2>/dev/null)/share/g1_description/urdf/g1_29dof.urdf"
+NAV2_PARAMS="$(source /opt/ros/${ROS_DISTRO_NAME}/setup.bash && source $WS_DIR/install/setup.bash 2>/dev/null && ros2 pkg prefix g1_bringup 2>/dev/null)/share/g1_bringup/config/nav2_params_hw.yaml"
 
 # ── Kill old session ──────────────────────────────────────────────────────
 tmux kill-session -t $SESSION 2>/dev/null || true
@@ -118,7 +121,7 @@ tmux send-keys -t $SESSION:core.0 \
 if [[ "$USE_ZED_ODOM" == "1" ]]; then
     # ZED VIO owns odom->zed_camera_link (->pelvis via the static TF below).
     # Relay ZED odom onto /odom — the topic Nav2 reads (nav2_params_hw
-    # odom_topic: /odom). Needs ros-humble-topic-tools.
+    # odom_topic: /odom). Needs ros-${ROS_DISTRO_NAME}-topic-tools.
     tmux send-keys -t $SESSION:core.1 \
         "$SOURCE_CMD && sleep 12 && echo '=== ZED-VIO ODOM (RTAB-Map OFF; relay ZED odom -> /odom) ===' && ros2 run topic_tools relay /zed/zed_node/odom /odom" Enter
 else
@@ -133,7 +136,7 @@ tmux send-keys -t $SESSION:core.2 \
 
 # Pane 3 - Nav2 + auto-activate
 tmux send-keys -t $SESSION:core.3 \
-    "$SOURCE_CMD && sleep 14 && echo '=== NAV2 ===' && (ros2 launch nav2_bringup navigation_launch.py use_sim_time:=false params_file:=$NAV2_PARAMS) & sleep 12 && ros2 service call /lifecycle_manager_navigation/manage_nodes nav2_msgs/srv/ManageLifecycleNodes '{command: 2}' && wait" Enter
+    "$SOURCE_CMD && sleep 14 && echo '=== NAV2 ===' && (ros2 launch nav2_bringup navigation_launch.py use_sim_time:=false params_file:=$NAV2_PARAMS) & sleep 12 && ros2 service call /lifecycle_manager_navigation/manage_nodes nav2_msgs/srv/ManageLifecycleNodes '{command: 0}' && wait" Enter
 
 # ── Window 'extras' ───────────────────────────────────────────────────────
 tmux new-window -t $SESSION -n extras
@@ -154,7 +157,7 @@ tmux send-keys -t $SESSION:extras.1 \
 
 # Pane 2 - RViz
 tmux send-keys -t $SESSION:extras.2 \
-    "$SOURCE_CMD && sleep 16 && echo '=== RVIZ ===' && rviz2 -d /opt/ros/humble/share/nav2_bringup/rviz/nav2_default_view.rviz" Enter
+    "$SOURCE_CMD && sleep 16 && echo '=== RVIZ ===' && rviz2 -d /opt/ros/${ROS_DISTRO_NAME}/share/nav2_bringup/rviz/nav2_default_view.rviz" Enter
 
 # Pane 3 - monitor
 tmux send-keys -t $SESSION:extras.3 \
@@ -172,7 +175,7 @@ if [[ "$WITH_ROBOT" == "1" ]]; then
     tmux split-window -v -t $SESSION:ctrl.0
     # Pane 1 - robot_node : drives the real G1 from /cmd_vel.
     tmux send-keys -t $SESSION:ctrl.1 \
-        "$SOURCE_CMD && sleep 8 && echo '=== ROBOT NODE — DRIVES THE G1 (robot must be STANDING, e-stop ready) ===' && ros2 run g1_robot robot_node --ros-args -p net_iface:=$NET_IFACE" Enter
+        "$SOURCE_CMD && sleep 8 && echo '=== ROBOT NODE — DRIVES THE G1 (robot must be STANDING, e-stop ready) ===' && ros2 run g1_robot robot_node --ros-args -p net_iface:=$NET_IFACE -r /cmd_vel:=/cmd_vel_smoothed" Enter
 fi
 
 # Focus core window

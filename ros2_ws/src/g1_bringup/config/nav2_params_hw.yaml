@@ -17,41 +17,13 @@ bt_navigator:
     odom_topic: /odom        # ZED VIO odom (remapped from /zed/zed_node/odom in hardware.launch.py)
     bt_loop_duration: 10
     default_server_timeout: 20
-    default_nav_to_pose_bt_xml: "/opt/ros/humble/share/nav2_bt_navigator/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml"
-    default_nav_through_poses_bt_xml: "/opt/ros/humble/share/nav2_bt_navigator/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml"
-    plugin_lib_names:
-      - nav2_compute_path_to_pose_action_bt_node
-      - nav2_compute_path_through_poses_action_bt_node
-      - nav2_follow_path_action_bt_node
-      - nav2_back_up_action_bt_node
-      - nav2_spin_action_bt_node
-      - nav2_wait_action_bt_node
-      - nav2_clear_costmap_service_bt_node
-      - nav2_is_stuck_condition_bt_node
-      - nav2_goal_reached_condition_bt_node
-      - nav2_goal_updated_condition_bt_node
-      - nav2_initial_pose_received_condition_bt_node
-      - nav2_reinitialize_global_localization_service_bt_node
-      - nav2_rate_controller_bt_node
-      - nav2_distance_controller_bt_node
-      - nav2_speed_controller_bt_node
-      - nav2_truncate_path_action_bt_node
-      - nav2_goal_updater_node_bt_node
-      - nav2_recovery_node_bt_node
-      - nav2_pipeline_sequence_bt_node
-      - nav2_round_robin_node_bt_node
-      - nav2_transform_available_condition_bt_node
-      - nav2_time_expired_condition_bt_node
-      - nav2_path_expiring_timer_condition
-      - nav2_distance_traveled_condition_bt_node
-      - nav2_single_trigger_bt_node
-      - nav2_is_battery_low_condition_bt_node
-      - nav2_navigate_through_poses_action_bt_node
-      - nav2_navigate_to_pose_action_bt_node
-      - nav2_remove_passed_goals_action_bt_node
-      - nav2_planner_selector_bt_node
-      - nav2_controller_selector_bt_node
-      - nav2_goal_checker_selector_bt_node
+    # BT XML paths intentionally omitted: hardcoding /opt/ros/humble/... segfaulted
+    # bt_navigator on Jazzy (file absent). Leaving these unset makes Nav2 load its
+    # own distro-correct default nav_to_pose / nav_through_poses trees.
+    #
+    # plugin_lib_names intentionally omitted on Jazzy: bt_navigator auto-loads the
+    # standard BT nodes by default, so re-listing them here (the Humble way)
+    # double-registers and crashes with "ID [ComputePathToPose] already registered".
 
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
@@ -123,10 +95,21 @@ local_costmap:
       height: 4
       resolution: 0.05
       robot_radius: 0.30
+      # ZED VIO odom->camera TF arrives with jittery latency (up to ~170ms), so
+      # the default 0.3s tolerance made the message filter drop every depth cloud
+      # ("timestamp earlier than transform cache") -> stale costmap -> controller
+      # output 0. A generous tolerance absorbs the VIO jitter.
+      transform_tolerance: 1.0
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
+        # DISABLED: the chest-mounted ZED is pitched ~17.6 deg down, so it sees the
+        # floor and marks it as an obstacle wall right in front -> RPP "detected
+        # collision ahead" -> robot never moves. Human avoidance is handled by the
+        # /g1/human_cmd velocity override (detection), not this costmap, so the demo
+        # navigates fine without depth obstacles. Re-enable + fix height filtering
+        # (min_obstacle_height vs the pitched-camera floor) if wall avoidance is wanted.
+        enabled: false
         observation_sources: depth
         depth:
           topic: /zed/zed_node/point_cloud/cloud_registered
@@ -175,11 +158,18 @@ global_costmap:
       rolling_window: true
       width: 20
       height: 20
+      transform_tolerance: 1.0   # absorb ZED-VIO TF jitter (see local_costmap)
       track_unknown_space: true
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
+        # DISABLED: the chest-mounted ZED is pitched ~17.6 deg down, so it sees the
+        # floor and marks it as an obstacle wall right in front -> RPP "detected
+        # collision ahead" -> robot never moves. Human avoidance is handled by the
+        # /g1/human_cmd velocity override (detection), not this costmap, so the demo
+        # navigates fine without depth obstacles. Re-enable + fix height filtering
+        # (min_obstacle_height vs the pitched-camera floor) if wall avoidance is wanted.
+        enabled: false
         observation_sources: depth
         depth:
           topic: /zed/zed_node/point_cloud/cloud_registered
@@ -215,23 +205,34 @@ planner_server:
     use_sim_time: false
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_navfn_planner/NavfnPlanner"
+      plugin: "nav2_navfn_planner::NavfnPlanner"   # Jazzy uses :: not / (Humble)
       tolerance: 0.5
       use_astar: false
       allow_unknown: true
 
-recoveries_server:
+# Jazzy: the node is `behavior_server` (was `recoveries_server` in Humble), the
+# param key is `behavior_plugins` (was `recovery_plugins`), and the plugin package
+# is `nav2_behaviors` (was `nav2_recoveries`).
+behavior_server:
   ros__parameters:
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
     cycle_frequency: 10.0
-    recovery_plugins: ["spin", "back_up", "wait"]
+    # Instance names ARE the action-server names the default Jazzy BT calls:
+    # it expects `backup` (not Humble's `back_up`), plus drive_on_heading /
+    # assisted_teleop. Mismatched names -> bt_navigator fails to activate with
+    # "backup action server not available".
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait", "assisted_teleop"]
     spin:
-      plugin: "nav2_recoveries::Spin"
-    back_up:
-      plugin: "nav2_recoveries::BackUp"
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
     wait:
-      plugin: "nav2_recoveries::Wait"
+      plugin: "nav2_behaviors::Wait"
+    assisted_teleop:
+      plugin: "nav2_behaviors::AssistedTeleop"
     spin_dist: 1.57
     linear_vel: -0.1
     simulate_ahead_time: 2.0
@@ -239,6 +240,58 @@ recoveries_server:
     min_rotational_vel: 0.3
     rotational_acc_lim: 1.0
     use_sim_time: false
+
+# Jazzy's navigation_launch.py adds collision_monitor as a MANAGED node that sits
+# in the cmd_vel path (velocity_smoother -> cmd_vel_smoothed -> collision_monitor
+# -> cmd_vel). It hard-requires observation_sources, so with no config here it
+# failed to configure and aborted Nav2 bringup. Minimal near-passthrough config:
+# a small stop circle around the robot, fed by the ZED point cloud with the floor
+# height-filtered out, so it activates and forwards cmd_vel without false stops.
+collision_monitor:
+  ros__parameters:
+    base_frame_id: "pelvis"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    # ZED-VIO odom TF lags ~50ms, so requesting the transform at "now" (what
+    # base_shift_correction does) hit "extrapolation into the future" -> the
+    # source went invalid -> collision_monitor forced a STOP and never forwarded
+    # cmd_vel. Use the data at its own stamp (no shift) + generous tolerances.
+    transform_tolerance: 1.0
+    source_timeout: 5.0
+    base_shift_correction: False
+    stop_pub_timeout: 2.0
+    polygons: ["PolygonStop"]
+    PolygonStop:
+      type: "circle"
+      radius: 0.35
+      action_type: "stop"
+      min_points: 8
+      visualize: True
+      polygon_pub_topic: "collision_polygon_stop"
+      enabled: True
+    observation_sources: ["pointcloud"]
+    pointcloud:
+      type: "pointcloud"
+      topic: "/zed/zed_node/point_cloud/cloud_registered"
+      min_height: -0.6     # metres in the pelvis frame; excludes the floor (~-0.8)
+      max_height: 0.5
+      enabled: True
+
+# Jazzy also adds docking_server (opennav_docking) as a MANAGED node. Unused here,
+# but it hard-requires `dock_plugins` or it fails to configure and aborts bringup.
+# Minimal plugin declaration so it configures/activates cleanly; no docks defined.
+docking_server:
+  ros__parameters:
+    controller_frequency: 50.0
+    dock_plugins: ['simple_charging_dock']
+    simple_charging_dock:
+      plugin: 'opennav_docking::SimpleChargingDock'
+    docks: ['none']
+    none:
+      type: 'simple_charging_dock'
+      frame: odom
+      pose: [0.0, 0.0, 0.0]
 
 robot_state_publisher:
   ros__parameters:
