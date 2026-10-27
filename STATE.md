@@ -55,7 +55,9 @@ ros2_ws/src/
 ├── g1_slam/           RTAB-Map config (config/rtabmap.yaml) + slam/localization launch.
 ├── g1_detection/      detection.py (HumanXZPredictor, from Human_dtp),
 │                      detection_node.py (ROS2 wrapper, camera-agnostic),
-│                      human_obstacle_node.py, eigen.py, kf.py, EigenTrajectory/.
+│                      human_obstacle_node.py, eigen.py, kf.py, EigenTrajectory/,
+│                      overlay_render.py (pure cv2/numpy renderer, no ROS import),
+│                      overlay_node.py (demo video: annotated egocentric MP4).
 ├── g1_robot/          robot_interface.py, g1.py (Unitree SDK — UNVERIFIED),
 │                      robot_node.py (/cmd_vel + /g1/human_cmd → SDK).
 └── g1_bringup/        launch/{genesis,offline,hardware,sim}.launch.py,
@@ -64,6 +66,11 @@ ros2_ws/src/
 genesis_sim/           genesis_node.py (sim bridge: camera render + body + avoidance override),
                        policy.py (RL locomotion wrapper — needs a checkpoint to walk),
                        g1_29dof.xml (MuJoCo model), meshes -> symlink.
+
+tools/                 Off-robot validation (no ROS needed):
+  preview_overlay.py                 synthetic scene -> overlay MP4 + stills
+  test_overlay_geometry.py           hand-derived pinhole/clipping checks
+  test_detection_world_track.py      world-track correctness + camera-frame regression
 
 Top-level scripts:
   run_genesis.sh / stop_genesis.sh   tmux launcher for Genesis sim (--viewer, --policy)
@@ -76,6 +83,26 @@ Top-level scripts:
 ## 5. Nav2 params are split (do not cross-contaminate)
 - `nav2_params_sim.yaml` — **permissive** for the feature-poor sim: collision detection OFF, costmaps inflation-only, position-only goal checker. Used by `genesis.launch.py` and `offline.launch.py`.
 - `nav2_params_hw.yaml` — **obstacle-aware**: depth-cloud obstacle layers, static SLAM map layer, collision detection ON. Used by `hardware.launch.py`.
+
+## 5b. Demo overlay (annotated egocentric video) — see `DEMO_VIDEO.md`
+
+`overlay_node` renders the ZED view with Human_dtp bounding boxes, each person's
+forecast trajectory, the Nav2 plan and the path actually walked, plus a
+bird's-eye inset; publishes `/g1/overlay/image` and writes an MP4. On by default
+in `run_zed_e2e.sh` (window `demo`) and `hardware.launch.py` (`overlay:=true`).
+
+Two things worth knowing before touching it:
+- It consumes `/g1/detections` (new JSON topic from `detection_node`) instead of
+  running YOLO twice, and draws each result on the frame whose stamp it came
+  from, so boxes don't lag inference.
+- `detection.py` now keeps a second, **geometrically correct** per-person track
+  (`tracks_world`, odom X-Y via a full 4x4 transform of the camera *optical*
+  frame) purely for this overlay. The legacy `tracks_xz` path that `/g1/human_cmd`
+  is tuned against is unchanged — verified bit-identical by
+  `tools/test_detection_world_track.py`. See §8 for why the legacy one is wrong.
+
+**Stop with `./run_zed_e2e.sh stop`**, not Ctrl-C on the terminal — the MP4 is
+finalised on node shutdown.
 
 ## 6. Camera support
 `detection_node` is camera-agnostic with configurable topic params:
@@ -128,6 +155,15 @@ ros2 launch g1_bringup hardware.launch.py robot_ip:=192.168.123.161   # camera:=
 - **numba import error** → `pip3 install "coverage>=7.0"`.
 - **NumPy 2 vs cv_bridge/matplotlib** → removed cv_bridge dep (direct numpy image conversion), upgraded matplotlib.
 - **colcon build `canonicalize_version`** → `pip3 install -U packaging`.
+- **Human world positions skew once the robot walks** → `_camera_xz_to_odom_xz`
+  in `detection.py` drops the optical Y axis and reads world rows 0+2, i.e. it
+  treats world *height* as a ground axis and applies a body-frame transform to
+  optical-frame points. Invisible in sim (TF ≈ identity, camera level). NOT fixed
+  — the avoidance thresholds are tuned against it and `/human_obstacle_cloud` is
+  commented out of `nav2_params_hw.yaml` because of it. The overlay sidesteps it
+  via `tracks_world`; fix that transform before enabling costmap injection.
+- **OpenCV Hershey fonts are ASCII-only** → any `·`, `—`, `°` in overlay text
+  renders as `?`. `overlay_render.ascii_safe()` normalises; keep `title` ASCII.
 - **zed_components "Could NOT find CUDA: required is at least 13"** → ZED SDK 5.2.3's cmake demands the CUDA 13 toolkit but the dev machine only has 12.5 (the SDK binary itself only needs the driver). Fixed: patched config at `ros2_ws/cmake/zed/`; build with `colcon build --packages-up-to zed_wrapper --cmake-args -DZED_DIR=$PWD/cmake/zed`. The wrapper clone (`ros2_ws/src/zed-ros2-wrapper`, v5.3.1) is gitignored — re-clone with `--recurse-submodules` on a fresh checkout. Smoke-tested 2026-06-10: node loads, topics are `/zed/zed_node/...`.
 
 ## 9. Immediate next steps (priority order)

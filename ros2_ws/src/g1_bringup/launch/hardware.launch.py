@@ -35,6 +35,7 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -45,6 +46,9 @@ def generate_launch_description():
     model_path = LaunchConfiguration("model_path", default="yolo11n.pt")
     rviz       = LaunchConfiguration("rviz",       default="true")
     slam_mode  = LaunchConfiguration("slam_mode",  default="mapping")
+    overlay_arg  = LaunchConfiguration("overlay",      default="true")
+    record_video = LaunchConfiguration("record_video", default="true")
+    video_path   = LaunchConfiguration("video_path",   default="")
 
     use_zed        = PythonExpression(["'", camera, "' == 'zed'"])
     use_realsense  = PythonExpression(["'", camera, "' != 'zed'"])
@@ -199,6 +203,34 @@ def generate_launch_description():
         )],
     )
 
+    # ── 5b. Demo overlay ─────────────────────────────────────────────────
+    # Egocentric camera view annotated with the Human_dtp boxes, each person's
+    # forecast trajectory, the Nav2 plan and the path actually walked. Consumes
+    # /g1/detections, so it adds no second YOLO pass. Publishes
+    # /g1/overlay/image and writes an MP4 (see g1_detection/overlay_node.py).
+    # Both camera paths are remapped into /camera/* above, so these defaults
+    # hold for RealSense and ZED alike.
+    overlay = TimerAction(
+        period=10.0,
+        actions=[Node(
+            package="g1_detection",
+            executable="overlay_node",
+            name="overlay_node",
+            output="screen",
+            parameters=[{
+                "color_topic":       "/camera/color/image_raw",
+                "camera_info_topic": "/camera/color/camera_info",
+                "world_frame":       "odom",     # matches nav2_params_hw global_frame
+                "base_frame":        "pelvis",
+                # A bare LaunchConfiguration resolves to the string "true"; the
+                # node declares `record` as a bool, so coerce the type here.
+                "record":            ParameterValue(record_video, value_type=bool),
+                "record_path":       ParameterValue(video_path, value_type=str),
+            }],
+        )],
+        condition=IfCondition(overlay_arg),
+    )
+
     # ── 6. Nav2 navigation stack ─────────────────────────────────────────
     nav2 = TimerAction(
         period=12.0,   # wait for SLAM to have a map
@@ -252,6 +284,12 @@ def generate_launch_description():
                               description="Launch RViz"),
         DeclareLaunchArgument("slam_mode",  default_value="mapping",
                               description="'mapping' or 'localization'"),
+        DeclareLaunchArgument("overlay",      default_value="true",
+                              description="Annotated demo video on /g1/overlay/image"),
+        DeclareLaunchArgument("record_video", default_value="true",
+                              description="Write the overlay to an MP4"),
+        DeclareLaunchArgument("video_path",   default_value="",
+                              description="MP4 path; empty = ~/g1_demos/g1_demo_<timestamp>.mp4"),
 
         robot_state_publisher,
         realsense,
@@ -260,6 +298,7 @@ def generate_launch_description():
         slam,
         detection,
         human_obstacle,
+        overlay,
         nav2,
         robot_node,
         rviz_node,

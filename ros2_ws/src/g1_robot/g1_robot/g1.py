@@ -24,6 +24,11 @@ class G1Robot(RobotInterface):
         self._client: LocoClient | None = None
         self._ready = False
         self._lock = threading.Lock()
+        # What the last send_command() actually handed to the SDK, and the SDK's
+        # return value — read by robot_node for the /g1/robot_cmd trial log.
+        # Bookkeeping only; nothing here changes what is sent.
+        self.last_sent: tuple[float, float, float] | None = None
+        self.last_ret = None
 
     def setup(self, config: RobotConfig) -> bool:
         self._config = config
@@ -67,14 +72,17 @@ class G1Robot(RobotInterface):
             return True
 
         with self._lock:
+            self.last_sent = None
+            self.last_ret = None
             try:
                 if cmd.mode == RobotMode.STOP:
-                    self._client.StopMove()
+                    self.last_ret = self._client.StopMove()
                 else:
                     vx  = float(max(-self.MAX_VX,   min(self.MAX_VX,   cmd.vx)))
                     vy  = float(max(-self.MAX_VY,   min(self.MAX_VY,   cmd.vy)))
                     wz  = float(max(-self.MAX_VYAW, min(self.MAX_VYAW, cmd.wz)))
-                    self._client.Move(vx, vy, wz)
+                    self.last_ret = self._client.Move(vx, vy, wz)
+                    self.last_sent = (vx, vy, wz)
                 return True
             except Exception as e:
                 print(f"[G1] send_command failed: {e}")

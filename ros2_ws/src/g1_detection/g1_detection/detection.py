@@ -117,6 +117,14 @@ class HumanXZPredictor:
         self.tracks_xz = defaultdict(lambda: deque(maxlen=self.history_size))
         self.tracks_2d = defaultdict(lambda: deque(maxlen=self.history_size))
 
+        # Parallel history in a *true* world ground plane (odom X-Y, Z-up), fed by
+        # a full 4x4 transform of the camera-OPTICAL-frame point (see
+        # `_camera_xyz_to_world_xy`). This exists purely so downstream consumers
+        # (the demo overlay) can project predictions back into the image without
+        # inheriting the flattened `_camera_xz_to_odom_xz` approximation that the
+        # avoidance thresholds are tuned against. Nothing here feeds /g1/human_cmd.
+        self.tracks_world = defaultdict(lambda: deque(maxlen=self.history_size))
+
         self.track_missed_counts = defaultdict(int)
         self.track_last_seen_ts = {}
         self.track_confirmed = defaultdict(bool)
@@ -127,6 +135,8 @@ class HumanXZPredictor:
         self.last_parsed_detections = []
 
         self.last_predictions = {}
+        self.last_predictions_world = {}
+        self._world_smooth = {}
 
         self.last_agv_cmd = "normal_operation"
         self.last_agv_state_str = "no_human_or_clear"
@@ -409,6 +419,26 @@ class HumanXZPredictor:
         return a * x_raw + b * prev_x, a * z_raw + b * prev_z
 
     def _extract_xz_from_pointcloud(self, point_cloud_xyz, cx, cy, box=None):
+        """2D form of `_extract_xyz_from_pointcloud`.
+
+        `process_frame` now calls the xyz version directly, so this has no
+        production caller — it is kept deliberately as the anchor for
+        `tools/test_detection_world_track.py`, which asserts the xyz refactor
+        returns bit-identical x/z to the original implementation. Do not delete
+        it as "unused" without also retiring that regression check.
+        """
+        xyz = self._extract_xyz_from_pointcloud(point_cloud_xyz, cx, cy, box=box)
+        if xyz is None:
+            return None
+        return xyz[0], xyz[2]
+
+    def _extract_xyz_from_pointcloud(self, point_cloud_xyz, cx, cy, box=None):
+        """Median camera-OPTICAL-frame (x right, y down, z forward) of the patch.
+
+        The validity mask deliberately ignores ``y`` so the returned ``x``/``z``
+        stay bit-identical to the long-standing 2D behaviour; ``y`` only rides
+        along for the world-frame projection used by the overlay.
+        """
         if point_cloud_xyz is None:
             return None
 
@@ -442,6 +472,7 @@ class HumanXZPredictor:
 
         patch = patch.reshape(-1, 3)
         x_vals = patch[:, 0]
+        y_vals = patch[:, 1]
         z_vals = patch[:, 2]
 
         valid_mask = np.isfinite(x_vals) & np.isfinite(z_vals) & (z_vals > 0.0)
@@ -452,9 +483,12 @@ class HumanXZPredictor:
             return None
 
         x_vals = x_vals[valid_mask]
+        y_vals = y_vals[valid_mask]
         z_vals = z_vals[valid_mask]
 
-        return float(np.median(x_vals)), float(np.median(z_vals))
+        y_med = np.median(y_vals[np.isfinite(y_vals)]) if np.any(np.isfinite(y_vals)) else 0.0
+
+        return float(np.median(x_vals)), float(y_med), float(np.median(z_vals))
 
     def _camera_xz_to_odom_xz(self, x_cam, z_cam, T_odom_camera):
         if T_odom_camera is None:
@@ -471,6 +505,29 @@ class HumanXZPredictor:
             return None
 
         return float(x_odom), float(z_odom)
+
+    @staticmethod
+    def _camera_xyz_to_world_xy(x_cam, y_cam, z_cam, T_world_optical):
+        """Full 4x4 transform of a camera-OPTICAL point into the world frame.
+
+        Unlike `_camera_xz_to_odom_xz` (which drops the optical Y axis and then
+        reads world rows 0/2, i.e. treats world *height* as a ground axis), this
+        keeps all three components and returns the genuine Z-up ground pair
+        ``(X, Y)`` plus the height ``Z``. Used only for visualisation.
+        """
+        if T_world_optical is None:
+            return None
+
+        T = np.asarray(T_world_optical, dtype=np.float64)
+        if T.shape != (4, 4) or not np.isfinite(T).all():
+            return None
+
+        p = np.array([x_cam, y_cam, z_cam, 1.0], dtype=np.float64)
+        w = T @ p
+        if not np.isfinite(w[:3]).all():
+            return None
+
+        return float(w[0]), float(w[1]), float(w[2])
 
     def _classify_agv_region(self, x_obj, z_obj, agv_x, agv_z):
         rel_x = float(x_obj - agv_x)
@@ -520,6 +577,9 @@ class HumanXZPredictor:
         self.track_confirmed.pop(track_id, None)
         self.track_seen_counts.pop(track_id, None)
         self.last_predictions.pop(track_id, None)
+        self.tracks_world.pop(track_id, None)
+        self.last_predictions_world.pop(track_id, None)
+        self._world_smooth.pop(track_id, None)
         self.eigen_adapter.remove_track(track_id)
 
     def _clear_stale_tracks(self):
@@ -579,7 +639,8 @@ class HumanXZPredictor:
             return [{"track_id": int(ids[i]), "box": boxes_np[i]} for i in range(len(boxes_np))]
         return [{"track_id": i, "box": boxes_np[i]} for i in range(len(boxes_np))]
 
-    def process_frame(self, color_frame, point_cloud_xyz, timestamp=None, T_odom_camera=None):
+    def process_frame(self, color_frame, point_cloud_xyz, timestamp=None, T_odom_camera=None,
+                      T_world_optical=None):
         if color_frame is None or point_cloud_xyz is None:
             return None, {
                 "success": False,
@@ -664,7 +725,8 @@ class HumanXZPredictor:
             cx, cy = self._get_center(box)
             tracks_2d[track_id].append((cx, cy))
 
-            xz = self._extract_xz_from_pointcloud(point_cloud_xyz, cx, cy, box=box)
+            xyz_cam = self._extract_xyz_from_pointcloud(point_cloud_xyz, cx, cy, box=box)
+            xz = None if xyz_cam is None else (xyz_cam[0], xyz_cam[2])
             if xz is None:
                 if self.draw:
                     x1, y1, x2, y2 = map(int, box)
@@ -704,6 +766,20 @@ class HumanXZPredictor:
 
             tracks_xz[track_id].append((x_smooth, z_smooth, timestamp))
 
+            # ── Parallel, geometrically-exact world track (visualisation only) ──
+            world_xyz = self._camera_xyz_to_world_xy(
+                x_cam, xyz_cam[1], z_cam, T_world_optical
+            )
+            if world_xyz is not None:
+                wx, wy, wz = world_xyz
+                prev_w = self._world_smooth.get(track_id)
+                if prev_w is not None:
+                    wx = self.smooth_alpha * wx + self.one_minus_alpha * prev_w[0]
+                    wy = self.smooth_alpha * wy + self.one_minus_alpha * prev_w[1]
+                    wz = self.smooth_alpha * wz + self.one_minus_alpha * prev_w[2]
+                self._world_smooth[track_id] = (wx, wy, wz)
+                self.tracks_world[track_id].append((wx, wy, timestamp))
+
             if self.eigen_enabled:
                 self.eigen_adapter.update_history(
                     track_id, np.asarray([x_smooth, z_smooth], dtype=np.float32)
@@ -727,6 +803,14 @@ class HumanXZPredictor:
                 self.last_predictions[track_id] = predictions
             else:
                 predictions = self.last_predictions.get(track_id, [])
+
+            # Same physics model, run over the exact world track. Visualisation
+            # only — never folded into the STOP/SLOW decision below.
+            if do_predict and len(self.tracks_world[track_id]) >= self.min_history_for_prediction:
+                self.last_predictions_world[track_id] = self._predict_future_xz(
+                    self.tracks_world[track_id]
+                )
+            predictions_world = self.last_predictions_world.get(track_id, [])
 
             representative_pred_dist = None
             representative_pred_region = None
@@ -875,6 +959,20 @@ class HumanXZPredictor:
                     "predictions_xz": [
                         {"x": float(px), "z": float(pz), "t": float(pt)}
                         for px, pz, pt in predictions
+                    ],
+                    "position_camera_m": {
+                        "x": float(x_cam), "y": float(xyz_cam[1]), "z": float(z_cam),
+                    },
+                    "position_world_m": (
+                        None if self._world_smooth.get(track_id) is None else {
+                            "x": float(self._world_smooth[track_id][0]),
+                            "y": float(self._world_smooth[track_id][1]),
+                            "z": float(self._world_smooth[track_id][2]),
+                        }
+                    ),
+                    "predictions_world": [
+                        {"x": float(px), "y": float(py), "t": float(pt)}
+                        for px, py, pt in predictions_world
                     ],
                     "track_confirmed": bool(confirmed[track_id]),
                     "missed_frames": int(self.track_missed_counts[track_id]),
