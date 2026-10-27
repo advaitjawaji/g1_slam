@@ -18,6 +18,7 @@ setup(
         "console_scripts": [
             "detection_node = g1_detection.detection_node:main",
             "human_obstacle_node = g1_detection.human_obstacle_node:main",
+            "viz_node = g1_detection.viz_node:main",
         ],
     },
 )
