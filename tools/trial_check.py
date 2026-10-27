@@ -28,9 +28,10 @@ REQUIRED = [
     "/zed/zed_node/rgb/color/rect/camera_info", "/rosout",
 ]
 REQUIRED_WITH_ROBOT = ["/g1/robot_cmd"]
-# Present whenever a goal was sent.
-EXPECTED_WITH_GOAL = ["/plan", "/local_plan", "/behavior_tree_log",
-                      "/navigate_to_pose/_action/status"]
+# Present whenever a goal was sent. (Humble's RPP publishes received_global_plan
+# and lookahead_point; nothing publishes /local_plan in this configuration.)
+EXPECTED_WITH_GOAL = ["/plan", "/received_global_plan", "/lookahead_point",
+                      "/behavior_tree_log", "/navigate_to_pose/_action/status"]
 
 problems: list[str] = []
 warnings: list[str] = []
@@ -86,33 +87,74 @@ def check_bag(trial, with_robot, goal_sent):
     return counts
 
 
-def check_robot_state(trial, with_robot):
-    path = os.path.join(trial, "robot_state", "lowstate.csv")
-    if not os.path.exists(path):
-        (problems if with_robot else warnings).append("robot_state/lowstate.csv missing")
-        return
-    first = last = None
-    rows = 0
+def csv_stats(path):
+    """(rows, columns, span_s) of a CSV whose first column is t_host_ns."""
+    rows, cols, first, last = 0, 0, None, None
     with open(path, newline="") as f:
         r = csv.reader(f)
-        next(r, None)
+        header = next(r, None) or []
+        cols = len(header)
         for row in r:
             rows += 1
             if first is None:
                 first = row[0]
             last = row[0]
-    if rows < 2:
-        problems.append("robot_state/lowstate.csv has no data rows")
+    try:
+        span = (int(last) - int(first)) / 1e9 if rows > 1 else 0.0
+    except (TypeError, ValueError):
+        span = 0.0
+    return rows, cols, span
+
+
+def report_csv(label, path, required, missing_note=""):
+    """Print one CSV's rows and rate; record a problem/warning if it is empty."""
+    if not os.path.exists(path):
+        (problems if required else warnings).append(f"{label} missing")
+        print(f"  {label:34s} missing")
         return
-    span = (int(last) - int(first)) / 1e9
-    print(f"\nRobot state: lowstate.csv {rows} rows over {span:.1f} s "
-          f"({rows / span if span > 0 else 0:.0f} Hz)")
-    for p in sorted(glob.glob(os.path.join(trial, "robot_state", "*.csv"))):
-        if p != path:
-            with open(p) as f:
-                n = sum(1 for _ in f) - 1
-            print(f"             {os.path.basename(p)} {n} rows"
-                  + ("  (firmware does not publish it)" if n <= 0 else ""))
+    rows, cols, span = csv_stats(path)
+    rate = f"{rows / span:.0f} Hz" if span > 0 else "-"
+    print(f"  {label:34s} {rows:8d} rows  {cols:4d} cols  {rate:>7s}"
+          + (f"  ({missing_note})" if rows == 0 and missing_note else ""))
+    if rows == 0 and required:
+        problems.append(f"{label} has no data rows")
+
+
+def check_robot_state(trial, with_robot):
+    d = os.path.join(trial, "robot_state")
+    print("\nRobot state (onboard, via unitree_sdk2py):")
+    if not os.path.isdir(d):
+        (problems if with_robot else warnings).append("robot_state/ missing")
+        print("  none recorded")
+        return
+    report_csv("robot_state/lowstate.csv", os.path.join(d, "lowstate.csv"), with_robot)
+    report_csv("robot_state/motor_health.csv", os.path.join(d, "motor_health.csv"), with_robot)
+    report_csv("robot_state/secondary_imu.csv", os.path.join(d, "secondary_imu.csv"), False,
+               "torso IMU not published?")
+    known = {"lowstate.csv", "motor_health.csv", "secondary_imu.csv"}
+    for p in sorted(glob.glob(os.path.join(d, "*.csv"))):
+        if os.path.basename(p) not in known:
+            report_csv(f"robot_state/{os.path.basename(p)}", p, False,
+                       "firmware does not publish it")
+
+
+def check_system_and_svo(trial, want_svo):
+    print("\nComputer load and camera recording:")
+    report_csv("system.csv", os.path.join(trial, "system.csv"), True)
+    svo = os.path.join(trial, "camera.svo2")
+    if not want_svo:
+        print("  camera.svo2                        (SVO=0)")
+        return
+    size = os.path.getsize(svo) if os.path.exists(svo) else 0
+    print(f"  camera.svo2                        {size / 1e6:8.1f} MB")
+    if size == 0:
+        log = os.path.join(trial, "svo.log")
+        why = ""
+        if os.path.exists(log):
+            with open(log) as f:
+                m = re.search(r"message='([^']*)'", f.read())
+            why = f" ({m.group(1)})" if m else " (see svo.log)"
+        problems.append(f"SVO recording requested but camera.svo2 is missing or empty{why}")
 
 
 def check_files(trial, record_video):
@@ -193,6 +235,7 @@ def main() -> int:
           f"git={str(launch.get('git_commit', '?'))[:10]}  dirty={launch.get('git_dirty')}")
     check_bag(trial, with_robot, goal_sent)
     check_robot_state(trial, with_robot)
+    check_system_and_svo(trial, str(launch.get("svo", "0")) == "1")
     check_files(trial, record_video)
 
     print()

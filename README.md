@@ -365,6 +365,7 @@ WITH_ROBOT=1 NET_IFACE=<nic> USE_ZED_ODOM=1 ./run_zed_e2e.sh
 | `RECORD_TRIAL` | `1` | Record a full trial folder under `TRIAL_ROOT` (`~/g1_trials`); see [TRIALS.md](TRIALS.md) |
 | `TRIAL_NAME`, `TRIAL_ENV`, `TRIAL_PEDS`, `TRIAL_PED_SPEED`, `TRIAL_NOTES` | *(empty)* | Pre-fill the trial's `trial.yaml` |
 | `BAG_IMAGES` / `BAG_CLOUD` / `BAG_EXTRA_TOPICS` | `compressed` / `0` / *(empty)* | What else goes in the trial rosbag |
+| `SVO` / `SVO_COMPRESSION` | `1` / `2` | ZED native SVO recording per trial (H.265 by default) |
 
 **tmux layout** (`tmux attach -t g1_zed`; `Ctrl-b n` / `Ctrl-b p` switch windows):
 
@@ -374,7 +375,7 @@ WITH_ROBOT=1 NET_IFACE=<nic> USE_ZED_ODOM=1 ./run_zed_e2e.sh
 | `extras` | static TF `zed_camera_link→pelvis` · robot_state_publisher · RViz · monitor shell |
 | `ctrl` | human_obstacle_node · robot_node (only with `WITH_ROBOT=1`) |
 | `demo` | overlay_node (only with `OVERLAY=1`) |
-| `trial` | rosbag recorder · ROS-graph snapshot · G1 state logger (with `WITH_ROBOT=1`); only with `RECORD_TRIAL=1` |
+| `trial` | rosbag recorder · system monitor · ROS-graph snapshot · ZED SVO (with `SVO=1`) · G1 state logger (with `WITH_ROBOT=1`); only with `RECORD_TRIAL=1` |
 
 Startup delays (~6–18 s) are baked in so each layer sees the topics it needs.
 

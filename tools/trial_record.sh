@@ -38,15 +38,32 @@ TOPICS=(
     /navigate_to_pose/_action/feedback
     /local_costmap/costmap
     /global_costmap/costmap
+    /local_costmap/published_footprint
+    /global_costmap/published_footprint
+    # Regulated Pure Pursuit internals (Humble RPP publishes these, not /local_plan)
+    /received_global_plan
+    /lookahead_point
+    /lookahead_collision_arc
     # State estimation
     /odom
     /zed/zed_node/odom
     /zed/zed_node/pose
+    /zed/zed_node/pose_with_covariance
+    /zed/zed_node/pose/status         # positional-tracking state (OK / searching / ...)
     /zed/zed_node/imu/data
+    /zed/zed_node/imu/data_raw
+    /zed/zed_node/imu/mag
+    /zed/zed_node/atm_press
+    /zed/zed_node/left_cam_imu_transform
     /tf
     /tf_static
     # Camera
     /zed/zed_node/rgb/color/rect/camera_info
+    /zed/zed_node/temperature/imu
+    /zed/zed_node/temperature/left
+    /zed/zed_node/temperature/right
+    /zed/zed_node/status/health
+    /zed/zed_node/status/heartbeat
     /g1/overlay/image/compressed
     # System
     /rosout

@@ -58,6 +58,8 @@ TRIAL_META="${TRIAL_META:-}"                 # pre-filled trial.yaml to copy ins
 BAG_IMAGES="${BAG_IMAGES:-compressed}"       # compressed | raw | none
 BAG_CLOUD="${BAG_CLOUD:-0}"                  # 1 = also bag the ZED point cloud (large)
 BAG_EXTRA_TOPICS="${BAG_EXTRA_TOPICS:-}"     # e.g. motion-capture topics
+SVO="${SVO:-1}"                              # 1 = ZED native SVO recording (stereo + IMU)
+SVO_COMPRESSION="${SVO_COMPRESSION:-2}"      # wrapper v5.3.1: 1 H264, 2 H265, 3-5 lossless
 CURRENT_TRIAL_FILE="$HOME/.g1_zed_current_trial"
 LAST_TRIAL_FILE="$HOME/.g1_zed_last_trial"
 
@@ -65,8 +67,38 @@ LAST_TRIAL_FILE="$HOME/.g1_zed_last_trial"
 SOURCE_CMD="cd $REPO_DIR && source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.bash && export LD_LIBRARY_PATH=/usr/local/cuda-13.0/targets/x86_64-linux/lib:\$LD_LIBRARY_PATH"
 
 # Processes that only finalise their output on a clean shutdown: the MP4
-# (overlay_node), the rosbag's metadata.yaml, and the robot-state CSVs.
-RECORDER_PATTERNS=("overlay_node" "ros2 bag record" "g1_state_logger")
+# (overlay_node), the rosbag's metadata.yaml, and the robot-state / system CSVs.
+# Patterns name the actual processes, not the pane-log files (logs/<name>.log)
+# whose 'sh -c cat >> ...' mirrors would otherwise match too.
+RECORDER_PATTERNS=("overlay_node" "ros2 bag record" "g1_state_logger.py" "sys_monitor.py")
+
+# Stop the robot BEFORE anything slow (SVO close, recorder flush). SIGINT lets
+# robot_node run its shutdown handler, which calls StopMove(); a SIGHUP from
+# tmux kill-session would skip it. Nav2 can no longer drive the robot after this.
+stop_robot() {
+    local pat="robot_node --ros-args"        # the node itself, not files named robot_node*
+    pgrep -f "$pat" >/dev/null 2>&1 || return 0
+    echo "Stopping robot_node (StopMove)..."
+    pkill -INT -f "$pat" || true
+    for _ in $(seq 1 25); do                # up to 5 s
+        pgrep -f "$pat" >/dev/null 2>&1 || return 0
+        sleep 0.2
+    done
+    echo "  robot_node did not exit; killing it."
+    pkill -KILL -f "$pat" || true
+}
+
+# Close the ZED's SVO through the wrapper's service while the camera node is
+# still running; killing the node first can leave the SVO unfinished.
+stop_svo() {
+    [[ -f "$CURRENT_TRIAL_FILE" ]] || return 0
+    local dir
+    dir="$(cat "$CURRENT_TRIAL_FILE")"
+    [[ -f "$dir/svo.log" ]] || return 0                       # never started
+    pgrep -f "zed_camera.launch.py" >/dev/null 2>&1 || return 0
+    echo "Closing ZED SVO recording..."
+    bash -c "$SOURCE_CMD && bash '$REPO_DIR/tools/trial_svo.sh' '$dir' stop" >/dev/null 2>&1 || true
+}
 
 # ORDER MATTERS. SIGINT the recorders and wait for them BEFORE tmux
 # kill-session SIGHUPs every pane; killing the session first leaves an
@@ -109,6 +141,8 @@ finish_trial() {
 
 # ── stop ──────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "stop" ]]; then
+    stop_robot
+    stop_svo
     flush_recorders
 
     tmux kill-session -t $SESSION 2>/dev/null || true
@@ -144,6 +178,8 @@ NAV2_PARAMS="$(source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup
 # ── Kill old session ──────────────────────────────────────────────────────
 # A previous launch that was never stopped may still be recording: close it out
 # cleanly so its trial folder stays usable.
+stop_robot
+stop_svo
 flush_recorders
 tmux kill-session -t $SESSION 2>/dev/null || true
 finish_trial
@@ -170,7 +206,7 @@ else
     echo "  Odometry:    RTAB-Map VO -> /odom. Use ZED VIO instead: USE_ZED_ODOM=1 $0"
 fi
 if [[ "$RECORD_TRIAL" == "1" ]]; then
-    echo "  Trial:       RECORDING -> $TRIAL_DIR  (images: $BAG_IMAGES, cloud: $BAG_CLOUD)"
+    echo "  Trial:       RECORDING -> $TRIAL_DIR  (images: $BAG_IMAGES, cloud: $BAG_CLOUD, SVO: $SVO)"
 else
     echo "  Trial:       not recording (RECORD_TRIAL=0)"
 fi
@@ -195,6 +231,8 @@ record_video: $RECORD
 bag_images: $BAG_IMAGES
 bag_cloud: $BAG_CLOUD
 bag_extra_topics: "$BAG_EXTRA_TOPICS"
+svo: $SVO
+svo_compression: $SVO_COMPRESSION
 git_commit: $(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
 git_dirty: $([[ -n "$(git -C "$REPO_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]] && echo true || echo false)
 nav2_params: "$NAV2_PARAMS"
@@ -322,26 +360,41 @@ if [[ "$OVERLAY" == "1" ]]; then
         "$SOURCE_CMD && sleep 16 && echo '=== DEMO OVERLAY ===' && ros2 run g1_detection overlay_node --ros-args -p color_topic:=/zed/zed_node/rgb/color/rect/image -p camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info -p world_frame:=odom -p base_frame:=pelvis -p record:=$([[ "$RECORD" == "1" ]] && echo true || echo false) -p record_path:=$DEMO_MP4" Enter
 fi
 
-# ── Window 'trial' : rosbag + ROS-graph snapshot (+ robot state) ──────────
+# ── Window 'trial' : everything that records the trial ────────────────────
+# trial_pane <log-name> <command>: one pane per recorder, tiled so none is
+# squeezed out as the count grows.
+TRIAL_PANES=0
+trial_pane() {
+    local idx=$TRIAL_PANES
+    if [[ $idx -gt 0 ]]; then
+        tmux split-window -v -t $SESSION:trial.$((idx - 1))
+        tmux select-layout -t $SESSION:trial tiled >/dev/null
+    fi
+    log_pane $SESSION:trial.$idx "$1"
+    tmux send-keys -t $SESSION:trial.$idx "$2" Enter
+    TRIAL_PANES=$((idx + 1))
+}
+
 if [[ "$RECORD_TRIAL" == "1" ]]; then
     tmux new-window -t $SESSION -n trial
-    log_pane $SESSION:trial.0 bag_record
-    # Pane 0 - rosbag. Starts early so it sees every topic as it appears.
-    tmux send-keys -t $SESSION:trial.0 \
-        "$SOURCE_CMD && sleep 3 && echo '=== TRIAL ROSBAG ===' && BAG_IMAGES=$BAG_IMAGES BAG_CLOUD=$BAG_CLOUD BAG_EXTRA_TOPICS='$BAG_EXTRA_TOPICS' bash $REPO_DIR/tools/trial_record.sh '$TRIAL_DIR'" Enter
-
-    tmux split-window -v -t $SESSION:trial.0
-    log_pane $SESSION:trial.1 snapshot
-    # Pane 1 - one-off snapshot of nodes, live params and TF once the stack is up.
-    tmux send-keys -t $SESSION:trial.1 \
-        "$SOURCE_CMD && sleep 35 && echo '=== TRIAL SNAPSHOT ===' && bash $REPO_DIR/tools/trial_snapshot.sh '$TRIAL_DIR'" Enter
-
+    # rosbag. Starts early so it sees every topic as it appears.
+    trial_pane bag_record \
+        "$SOURCE_CMD && sleep 3 && echo '=== TRIAL ROSBAG ===' && BAG_IMAGES=$BAG_IMAGES BAG_CLOUD=$BAG_CLOUD BAG_EXTRA_TOPICS='$BAG_EXTRA_TOPICS' bash $REPO_DIR/tools/trial_record.sh '$TRIAL_DIR'"
+    # Computer load (CPU / GPU / per-component), for the whole run.
+    trial_pane sys_monitor \
+        "$SOURCE_CMD && sleep 2 && echo '=== SYSTEM MONITOR ===' && python3 $REPO_DIR/tools/sys_monitor.py --out '$TRIAL_DIR/system.csv'"
+    # One-off snapshot of nodes, live params and TF once the stack is up.
+    trial_pane snapshot \
+        "$SOURCE_CMD && sleep 35 && echo '=== TRIAL SNAPSHOT ===' && bash $REPO_DIR/tools/trial_snapshot.sh '$TRIAL_DIR'"
+    if [[ "$SVO" == "1" ]]; then
+        # ZED native recording; waits for the camera's service to appear.
+        trial_pane svo \
+            "$SOURCE_CMD && sleep 12 && echo '=== ZED SVO RECORDING ===' && SVO_COMPRESSION=$SVO_COMPRESSION bash $REPO_DIR/tools/trial_svo.sh '$TRIAL_DIR' start"
+    fi
     if [[ "$WITH_ROBOT" == "1" ]]; then
-        tmux split-window -v -t $SESSION:trial.1
-        log_pane $SESSION:trial.2 robot_state
-        # Pane 2 - G1 onboard state (rt/lowstate etc.). Subscribe-only.
-        tmux send-keys -t $SESSION:trial.2 \
-            "$SOURCE_CMD && sleep 8 && echo '=== G1 STATE LOGGER (read-only) ===' && python3 $REPO_DIR/tools/g1_state_logger.py --out '$TRIAL_DIR/robot_state' --iface '$NET_IFACE'" Enter
+        # G1 onboard state (rt/lowstate, torso IMU, ...). Subscribe-only.
+        trial_pane robot_state \
+            "$SOURCE_CMD && sleep 8 && echo '=== G1 STATE LOGGER (read-only) ===' && python3 $REPO_DIR/tools/g1_state_logger.py --out '$TRIAL_DIR/robot_state' --iface '$NET_IFACE'"
     fi
 fi
 
