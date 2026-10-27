@@ -32,6 +32,7 @@ TOPICS=(
     /plan
     /local_plan
     /cmd_vel                  # Nav2 output, BEFORE the safety override
+    /cmd_vel_smoothed         # velocity_smoother output; robot_node reads this on Jazzy
     /cmd_vel_nav              # controller output before the velocity smoother, if present
     /behavior_tree_log
     /navigate_to_pose/_action/status

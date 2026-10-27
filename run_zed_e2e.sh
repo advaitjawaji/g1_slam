@@ -243,6 +243,7 @@ urdf: "$URDF_PATH"
 EOF
     TRIAL_NAME="$TRIAL_NAME" TRIAL_ENV="$TRIAL_ENV" TRIAL_PEDS="$TRIAL_PEDS" \
     TRIAL_PED_SPEED="$TRIAL_PED_SPEED" TRIAL_NOTES="$TRIAL_NOTES" TRIAL_META="$TRIAL_META" \
+    ROS_DISTRO_NAME="$ROS_DISTRO_NAME" \
         bash "$REPO_DIR/tools/trial_init.sh" "$TRIAL_DIR" "$REPO_DIR" "$WS_DIR" "$NAV2_PARAMS" \
         || echo "WARNING: trial_init.sh failed; continuing without code/version snapshot."
     # Every ROS node writes its log file into the trial folder too.

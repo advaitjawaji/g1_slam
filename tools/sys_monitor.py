@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import os
 import shutil
 import signal
@@ -42,7 +43,8 @@ GROUPS = [
     ("sys_monitor",    ["sys_monitor"]),
     ("nav2",           ["controller_server", "planner_server", "bt_navigator",
                         "behavior_server", "smoother_server", "velocity_smoother",
-                        "waypoint_follower", "lifecycle_manager"]),
+                        "waypoint_follower", "lifecycle_manager",
+                        "collision_monitor", "opennav_docking", "route_server"]),
     ("zed",            ["zed"]),
     ("rviz",           ["rviz2"]),
     ("tf_rsp",         ["static_transform_publisher", "robot_state_publisher"]),
@@ -86,10 +88,23 @@ def cpu_temp() -> float | str:
     try:
         temps = psutil.sensors_temperatures()
     except (AttributeError, OSError):
-        return ""
+        temps = {}
     vals = [t.current for name in ("coretemp", "k10temp", "cpu_thermal", "acpitz")
             for t in temps.get(name, []) if t.current is not None]
-    return max(vals) if vals else ""
+    if vals:
+        return max(vals)
+    # Jetson: the CPU sensor is a thermal zone, which psutil skips when any
+    # hwmon sensor exists.
+    for zone in glob.glob("/sys/class/thermal/thermal_zone*"):
+        try:
+            with open(os.path.join(zone, "type")) as f:
+                if f.read().strip() != "cpu-thermal":
+                    continue
+            with open(os.path.join(zone, "temp")) as f:
+                return int(f.read()) / 1000.0
+        except (OSError, ValueError):
+            continue
+    return ""
 
 
 def main() -> int:

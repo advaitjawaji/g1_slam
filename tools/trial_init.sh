@@ -72,9 +72,11 @@ cp "$NAV2_PARAMS" "$TRIAL_DIR/snapshot/nav2_params_hw.installed.yaml" 2>/dev/nul
     echo "== zed sdk";      grep -E "#define ZED_SDK_(MAJOR|MINOR|SUB|PATCH)_VERSION" \
                                 /usr/local/zed/include/sl/Camera.hpp 2>&1
     echo "== zed wrapper";  git -C "$WS_DIR/src/zed-ros2-wrapper" describe --tags --always 2>&1
-    echo "== ros packages"; dpkg-query -W -f='${Package} ${Version}\n' \
-                                'ros-humble-nav2*' 'ros-humble-rosbag2*' 'ros-humble-rclpy' \
-                                'ros-humble-topic-tools' 'ros-humble-tf2-ros' 2>&1
+    distro="${ROS_DISTRO_NAME:-${ROS_DISTRO:-$(ls /opt/ros 2>/dev/null | head -n 1)}}"
+    echo "== ros packages ($distro)"
+    dpkg-query -W -f='${Package} ${Version}\n' \
+        "ros-$distro-nav2*" "ros-$distro-rosbag2*" "ros-$distro-rclpy" \
+        "ros-$distro-topic-tools" "ros-$distro-tf2-ros" 2>&1
     echo "== python";       python3 --version 2>&1
     python3 -m pip show ultralytics torch numpy opencv-python unitree_sdk2py 2>/dev/null \
         | grep -E '^(Name|Version):'
