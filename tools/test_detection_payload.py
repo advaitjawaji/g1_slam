@@ -39,7 +39,7 @@ T_wo = np.eye(4)
 T_wo[:3, :3] = R_BASE
 T_wo[:3, 3] = [0.0, 0.0, 1.2]
 
-pred = HumanXZPredictor(model_path="stub", draw=False, profile=False,
+pred = HumanXZPredictor(model_path="stub", draw=False, profile=True,
                         min_history_for_prediction=3, predict_every_n=1,
                         min_confirm_frames=2)
 pred.model = None
@@ -62,6 +62,11 @@ for i in range(14):
 
 check("predictor produced detections", len(result["detections"]) > 0,
       f"n={len(result['detections'])}")
+check("profile=True yields per-stage timings for the trial log",
+      set(result.get("timings_ms", {})) >= {"total", "inference", "post"},
+      str(result.get("timings_ms")))
+check("safety forecast (camera-frame) is available to log",
+      any(len(d.get("predictions_xz", [])) > 0 for d in result["detections"]))
 
 
 # ── Serialise exactly as detection_node._publish_detections does ──────────
@@ -77,6 +82,10 @@ def serialise(result, world_ok=True, width=W, height=H):
             "cam":    det.get("position_camera_m"),
             "world":  det.get("position_world_m"),
             "pred":   [[p["x"], p["y"]] for p in det.get("predictions_world", [])][::2],
+            "xz":     det.get("position_xz_m"),
+            "pred_safety": [[round(p["x"], 3), round(p["z"], 3)]
+                            for p in det.get("predictions_xz", [])],
+            "missed": det.get("missed_frames"),
         })
     agv = result.get("agv_movement", {})
     return {
@@ -89,6 +98,13 @@ def serialise(result, world_ok=True, width=W, height=H):
         "state":       agv.get("range_state"),
         "closest_m":   agv.get("closest_human_depth_m"),
         "latency_ms":  31.4,
+        "frame_idx":   14,
+        "inference_ran": result.get("inference_ran"),
+        "timings_ms":  result.get("timings_ms"),
+        "t_rx":        1234_500000000,
+        "t_done":      1234_531400000,
+        "depth_stamp_ns": 1234_560000000,
+        "map_tf_ok":   False,
         "detections":  dets,
     }
 

@@ -41,27 +41,75 @@ OVERLAY="${OVERLAY:-1}"
 RECORD="${RECORD:-1}"
 DEMO_DIR="${DEMO_DIR:-$HOME/g1_demos}"
 
+# Trial recording (ON by default): every launch gets its own folder under
+# TRIAL_ROOT holding the rosbag, every pane's console output, ROS node logs,
+# parameter + TF snapshots, the robot's onboard state, the overlay MP4, the
+# exact code that ran and software versions. See TRIALS.md. Off: RECORD_TRIAL=0.
+#   TRIAL_NAME=corridor_2ped TRIAL_ENV=corridor TRIAL_PEDS=2 TRIAL_PED_SPEED=normal \
+#     WITH_ROBOT=1 NET_IFACE=enp4s0 USE_ZED_ODOM=1 ./run_zed_e2e.sh
+RECORD_TRIAL="${RECORD_TRIAL:-1}"
+TRIAL_ROOT="${TRIAL_ROOT:-$HOME/g1_trials}"
+TRIAL_NAME="${TRIAL_NAME:-}"; TRIAL_NAME="${TRIAL_NAME// /_}"
+TRIAL_ENV="${TRIAL_ENV:-}"
+TRIAL_PEDS="${TRIAL_PEDS:-}"
+TRIAL_PED_SPEED="${TRIAL_PED_SPEED:-}"
+TRIAL_NOTES="${TRIAL_NOTES:-}"
+TRIAL_META="${TRIAL_META:-}"                 # pre-filled trial.yaml to copy instead
+BAG_IMAGES="${BAG_IMAGES:-compressed}"       # compressed | raw | none
+BAG_CLOUD="${BAG_CLOUD:-0}"                  # 1 = also bag the ZED point cloud (large)
+BAG_EXTRA_TOPICS="${BAG_EXTRA_TOPICS:-}"     # e.g. motion-capture topics
+CURRENT_TRIAL_FILE="$HOME/.g1_zed_current_trial"
+LAST_TRIAL_FILE="$HOME/.g1_zed_last_trial"
+
 # ── Helpers ───────────────────────────────────────────────────────────────
 SOURCE_CMD="cd $REPO_DIR && source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.bash && export LD_LIBRARY_PATH=/usr/local/cuda-13.0/targets/x86_64-linux/lib:\$LD_LIBRARY_PATH"
 
+# Processes that only finalise their output on a clean shutdown: the MP4
+# (overlay_node), the rosbag's metadata.yaml, and the robot-state CSVs.
+RECORDER_PATTERNS=("overlay_node" "ros2 bag record" "g1_state_logger")
+
+# ORDER MATTERS. SIGINT the recorders and wait for them BEFORE tmux
+# kill-session SIGHUPs every pane; killing the session first leaves an
+# unplayable MP4 and a bag with no metadata.
+flush_recorders() {
+    local p any=0 alive
+    for p in "${RECORDER_PATTERNS[@]}"; do
+        if pgrep -f "$p" >/dev/null 2>&1; then pkill -INT -f "$p" || true; any=1; fi
+    done
+    [[ $any == 1 ]] || return 0
+    echo "Flushing recordings (video, rosbag, robot state)..."
+    for _ in $(seq 1 60); do                # up to 12 s
+        alive=0
+        for p in "${RECORDER_PATTERNS[@]}"; do pgrep -f "$p" >/dev/null 2>&1 && alive=1; done
+        [[ $alive == 0 ]] && { echo "  done."; return 0; }
+        sleep 0.2
+    done
+    echo "  a recorder did not exit; forcing (its file may be truncated)."
+    for p in "${RECORDER_PATTERNS[@]}"; do pkill -KILL -f "$p" || true; done
+}
+
+# Mirror a pane's terminal output into the trial folder (no-op when not recording).
+log_pane() {
+    [[ "$RECORD_TRIAL" == "1" ]] || return 0
+    tmux pipe-pane -o -t "$1" "cat >> '$TRIAL_DIR/logs/$2.log'"
+}
+
+# Close out the trial a previous launch was recording, then check it.
+finish_trial() {
+    [[ -f "$CURRENT_TRIAL_FILE" ]] || return 0
+    local dir
+    dir="$(cat "$CURRENT_TRIAL_FILE")"
+    mv "$CURRENT_TRIAL_FILE" "$LAST_TRIAL_FILE"
+    [[ -d "$dir" ]] || return 0
+    echo "end_time: $(date --iso-8601=seconds)" >> "$dir/launch_info.yaml"
+    echo ""
+    echo "Trial saved: $dir"
+    python3 "$REPO_DIR/tools/trial_check.py" "$dir" || true
+}
+
 # ── stop ──────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "stop" ]]; then
-    # ORDER MATTERS. The MP4 is only finalised when overlay_node runs its
-    # shutdown handler, so it must be SIGINT'd and given time to exit BEFORE
-    # tmux kill-session SIGHUPs every pane. Killing the session first leaves an
-    # unplayable file.
-    if pgrep -f overlay_node >/dev/null 2>&1; then
-        echo "Flushing demo video..."
-        pkill -INT -f overlay_node || true
-        for _ in $(seq 1 40); do            # up to 8 s
-            pgrep -f overlay_node >/dev/null 2>&1 || break
-            sleep 0.2
-        done
-        pgrep -f overlay_node >/dev/null 2>&1 \
-            && { echo "  overlay_node did not exit; forcing (MP4 may be truncated)."; \
-                 pkill -KILL -f overlay_node || true; } \
-            || echo "  done."
-    fi
+    flush_recorders
 
     tmux kill-session -t $SESSION 2>/dev/null || true
     pkill -f zed_wrapper || true
@@ -74,7 +122,9 @@ if [[ "${1:-}" == "stop" ]]; then
     pkill -f human_obstacle_node || true
     pkill -f robot_node || true
     pkill -f "relay /zed/zed_node/odom" || true
+    pkill -f trial_snapshot || true
     echo "Stopped."
+    finish_trial
     exit 0
 fi
 
@@ -92,7 +142,16 @@ URDF_PATH="$(source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.b
 NAV2_PARAMS="$(source /opt/ros/humble/setup.bash && source $WS_DIR/install/setup.bash 2>/dev/null && ros2 pkg prefix g1_bringup 2>/dev/null)/share/g1_bringup/config/nav2_params_hw.yaml"
 
 # ── Kill old session ──────────────────────────────────────────────────────
+# A previous launch that was never stopped may still be recording: close it out
+# cleanly so its trial folder stays usable.
+flush_recorders
 tmux kill-session -t $SESSION 2>/dev/null || true
+finish_trial
+
+TRIAL_DIR=""
+if [[ "$RECORD_TRIAL" == "1" ]]; then
+    TRIAL_DIR="$TRIAL_ROOT/$(date +%Y%m%d_%H%M%S)${TRIAL_NAME:+_$TRIAL_NAME}"
+fi
 
 echo ""
 echo "============================================================"
@@ -110,9 +169,44 @@ if [[ "$USE_ZED_ODOM" == "1" ]]; then
 else
     echo "  Odometry:    RTAB-Map VO -> /odom. Use ZED VIO instead: USE_ZED_ODOM=1 $0"
 fi
+if [[ "$RECORD_TRIAL" == "1" ]]; then
+    echo "  Trial:       RECORDING -> $TRIAL_DIR  (images: $BAG_IMAGES, cloud: $BAG_CLOUD)"
+else
+    echo "  Trial:       not recording (RECORD_TRIAL=0)"
+fi
 echo "============================================================"
 echo "Starting in 2 s (Ctrl+C to cancel)..."
 sleep 2
+
+# ── Trial folder ──────────────────────────────────────────────────────────
+if [[ "$RECORD_TRIAL" == "1" ]]; then
+    mkdir -p "$TRIAL_DIR/logs" "$TRIAL_DIR/ros_logs"
+    echo "$TRIAL_DIR" > "$CURRENT_TRIAL_FILE"
+    cat > "$TRIAL_DIR/launch_info.yaml" <<EOF
+# Written by run_zed_e2e.sh at launch; end_time is appended by './run_zed_e2e.sh stop'.
+start_time: $(date --iso-8601=seconds)
+host: $(hostname)
+launcher: run_zed_e2e.sh
+with_robot: $WITH_ROBOT
+net_iface: "$NET_IFACE"
+use_zed_odom: $USE_ZED_ODOM
+overlay: $OVERLAY
+record_video: $RECORD
+bag_images: $BAG_IMAGES
+bag_cloud: $BAG_CLOUD
+bag_extra_topics: "$BAG_EXTRA_TOPICS"
+git_commit: $(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
+git_dirty: $([[ -n "$(git -C "$REPO_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]] && echo true || echo false)
+nav2_params: "$NAV2_PARAMS"
+urdf: "$URDF_PATH"
+EOF
+    TRIAL_NAME="$TRIAL_NAME" TRIAL_ENV="$TRIAL_ENV" TRIAL_PEDS="$TRIAL_PEDS" \
+    TRIAL_PED_SPEED="$TRIAL_PED_SPEED" TRIAL_NOTES="$TRIAL_NOTES" TRIAL_META="$TRIAL_META" \
+        bash "$REPO_DIR/tools/trial_init.sh" "$TRIAL_DIR" "$REPO_DIR" "$WS_DIR" "$NAV2_PARAMS" \
+        || echo "WARNING: trial_init.sh failed; continuing without code/version snapshot."
+    # Every ROS node writes its log file into the trial folder too.
+    SOURCE_CMD="$SOURCE_CMD && export ROS_LOG_DIR='$TRIAL_DIR/ros_logs'"
+fi
 
 # ── Localization mode → ZED launch args + which node owns map->odom ─────────
 if [[ "$USE_ZED_ODOM" == "1" ]]; then
@@ -135,6 +229,10 @@ tmux new-session -d -s $SESSION -x 220 -y 50 -n core
 tmux split-window -h -t $SESSION:core
 tmux split-window -v -t $SESSION:core.0
 tmux split-window -v -t $SESSION:core.2
+log_pane $SESSION:core.0 zed
+log_pane $SESSION:core.1 odom_source
+log_pane $SESSION:core.2 detection
+log_pane $SESSION:core.3 nav2
 
 # Pane 0 - ZED
 tmux send-keys -t $SESSION:core.0 \
@@ -166,6 +264,10 @@ tmux new-window -t $SESSION -n extras
 tmux split-window -h -t $SESSION:extras
 tmux split-window -v -t $SESSION:extras.0
 tmux split-window -v -t $SESSION:extras.2
+log_pane $SESSION:extras.0 static_tf
+log_pane $SESSION:extras.1 robot_state_publisher
+log_pane $SESSION:extras.2 rviz
+log_pane $SESSION:extras.3 monitor
 
 # Pane 0 - static TF: ZED head mount (zed_camera_link -> pelvis).
 # Cam is 5cm fwd / 40cm up / ~17.5° down from pelvis; these are the INVERSE
@@ -188,6 +290,7 @@ tmux send-keys -t $SESSION:extras.3 \
 
 # ── Window 'ctrl' : human-obstacle injector (+ optional robot driver) ──────
 tmux new-window -t $SESSION -n ctrl
+log_pane $SESSION:ctrl.0 human_obstacle
 
 # Pane 0 - human_obstacle_node : /humans/markers -> /human_obstacle_cloud
 #          (perception only, always on; costmap source is still opt-in in YAML)
@@ -196,6 +299,7 @@ tmux send-keys -t $SESSION:ctrl.0 \
 
 if [[ "$WITH_ROBOT" == "1" ]]; then
     tmux split-window -v -t $SESSION:ctrl.0
+    log_pane $SESSION:ctrl.1 robot_node
     # Pane 1 - robot_node : drives the real G1 from /cmd_vel.
     tmux send-keys -t $SESSION:ctrl.1 \
         "$SOURCE_CMD && sleep 8 && echo '=== ROBOT NODE — DRIVES THE G1 (robot must be STANDING, e-stop ready) ===' && ros2 run g1_robot robot_node --ros-args -p net_iface:=$NET_IFACE" Enter
@@ -203,14 +307,42 @@ fi
 
 # ── Window 'demo' : the annotated egocentric video ────────────────────────
 if [[ "$OVERLAY" == "1" ]]; then
-    mkdir -p "$DEMO_DIR"
-    DEMO_MP4="$DEMO_DIR/g1_demo_$(date +%Y%m%d_%H%M%S).mp4"
+    if [[ "$RECORD_TRIAL" == "1" ]]; then
+        DEMO_MP4="$TRIAL_DIR/overlay.mp4"      # the video belongs with its trial
+    else
+        mkdir -p "$DEMO_DIR"
+        DEMO_MP4="$DEMO_DIR/g1_demo_$(date +%Y%m%d_%H%M%S).mp4"
+    fi
     tmux new-window -t $SESSION -n demo
+    log_pane $SESSION:demo.0 overlay
     # Starts after detection so intrinsics + the first /g1/detections have
     # landed; it renders regardless, so a late detector just means the opening
     # seconds have no boxes.
     tmux send-keys -t $SESSION:demo.0 \
         "$SOURCE_CMD && sleep 16 && echo '=== DEMO OVERLAY ===' && ros2 run g1_detection overlay_node --ros-args -p color_topic:=/zed/zed_node/rgb/color/rect/image -p camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info -p world_frame:=odom -p base_frame:=pelvis -p record:=$([[ "$RECORD" == "1" ]] && echo true || echo false) -p record_path:=$DEMO_MP4" Enter
+fi
+
+# ── Window 'trial' : rosbag + ROS-graph snapshot (+ robot state) ──────────
+if [[ "$RECORD_TRIAL" == "1" ]]; then
+    tmux new-window -t $SESSION -n trial
+    log_pane $SESSION:trial.0 bag_record
+    # Pane 0 - rosbag. Starts early so it sees every topic as it appears.
+    tmux send-keys -t $SESSION:trial.0 \
+        "$SOURCE_CMD && sleep 3 && echo '=== TRIAL ROSBAG ===' && BAG_IMAGES=$BAG_IMAGES BAG_CLOUD=$BAG_CLOUD BAG_EXTRA_TOPICS='$BAG_EXTRA_TOPICS' bash $REPO_DIR/tools/trial_record.sh '$TRIAL_DIR'" Enter
+
+    tmux split-window -v -t $SESSION:trial.0
+    log_pane $SESSION:trial.1 snapshot
+    # Pane 1 - one-off snapshot of nodes, live params and TF once the stack is up.
+    tmux send-keys -t $SESSION:trial.1 \
+        "$SOURCE_CMD && sleep 35 && echo '=== TRIAL SNAPSHOT ===' && bash $REPO_DIR/tools/trial_snapshot.sh '$TRIAL_DIR'" Enter
+
+    if [[ "$WITH_ROBOT" == "1" ]]; then
+        tmux split-window -v -t $SESSION:trial.1
+        log_pane $SESSION:trial.2 robot_state
+        # Pane 2 - G1 onboard state (rt/lowstate etc.). Subscribe-only.
+        tmux send-keys -t $SESSION:trial.2 \
+            "$SOURCE_CMD && sleep 8 && echo '=== G1 STATE LOGGER (read-only) ===' && python3 $REPO_DIR/tools/g1_state_logger.py --out '$TRIAL_DIR/robot_state' --iface '$NET_IFACE'" Enter
+    fi
 fi
 
 # Focus core window
@@ -234,6 +366,14 @@ if [[ "$OVERLAY" == "1" ]]; then
         echo "  IMPORTANT:           stop with './run_zed_e2e.sh stop' so the MP4 is flushed."
     fi
     echo "  disable:             OVERLAY=0 ./run_zed_e2e.sh   (or RECORD=0 to view without saving)"
+    echo ""
+fi
+if [[ "$RECORD_TRIAL" == "1" ]]; then
+    echo "Trial folder:          $TRIAL_DIR"
+    echo "  wait for 'Snapshot ... done' in window 'trial' (~65 s) before starting the run"
+    echo "  send a logged goal:  python3 tools/send_goal.py 3.0 0.0"
+    echo "  mark a moment:       python3 tools/trial_event.py --kind ped_start \"P1 starts walking\""
+    echo "  IMPORTANT:           stop with './run_zed_e2e.sh stop' so the bag and video close cleanly"
     echo ""
 fi
 

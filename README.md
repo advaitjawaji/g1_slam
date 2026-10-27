@@ -111,6 +111,7 @@ brought up before hardware, and they still run.
 | [E2E_TEST.md](E2E_TEST.md) | **Staged bring-up** for the ZED hardware stack. Run this before the full stack. |
 | [ZED2_TEST.md](ZED2_TEST.md) | Standalone ZED + detection lab procedure (no robot, no Nav2). |
 | [DEMO_VIDEO.md](DEMO_VIDEO.md) | The annotated overlay: how to record it, tune it, and iterate off-robot. |
+| [TRIALS.md](TRIALS.md) | Trial recording: what each launch's trial folder holds and where each metric's data comes from. |
 | [PLAN.md](PLAN.md) | Original 3-week implementation roadmap. |
 
 ---
@@ -360,7 +361,10 @@ WITH_ROBOT=1 NET_IFACE=<nic> USE_ZED_ODOM=1 ./run_zed_e2e.sh
 | `USE_ZED_ODOM` | `0` | `1` = ZED VIO, RTAB-Map off. `0` = RTAB-Map visual odometry |
 | `OVERLAY` | `1` | The annotated demo video node |
 | `RECORD` | `1` | Write the overlay to an MP4 |
-| `DEMO_DIR` | `~/g1_demos` | Where the MP4 lands |
+| `DEMO_DIR` | `~/g1_demos` | Where the MP4 lands (when `RECORD_TRIAL=0`) |
+| `RECORD_TRIAL` | `1` | Record a full trial folder under `TRIAL_ROOT` (`~/g1_trials`); see [TRIALS.md](TRIALS.md) |
+| `TRIAL_NAME`, `TRIAL_ENV`, `TRIAL_PEDS`, `TRIAL_PED_SPEED`, `TRIAL_NOTES` | *(empty)* | Pre-fill the trial's `trial.yaml` |
+| `BAG_IMAGES` / `BAG_CLOUD` / `BAG_EXTRA_TOPICS` | `compressed` / `0` / *(empty)* | What else goes in the trial rosbag |
 
 **tmux layout** (`tmux attach -t g1_zed`; `Ctrl-b n` / `Ctrl-b p` switch windows):
 
@@ -370,6 +374,7 @@ WITH_ROBOT=1 NET_IFACE=<nic> USE_ZED_ODOM=1 ./run_zed_e2e.sh
 | `extras` | static TF `zed_camera_link→pelvis` · robot_state_publisher · RViz · monitor shell |
 | `ctrl` | human_obstacle_node · robot_node (only with `WITH_ROBOT=1`) |
 | `demo` | overlay_node (only with `OVERLAY=1`) |
+| `trial` | rosbag recorder · ROS-graph snapshot · G1 state logger (with `WITH_ROBOT=1`); only with `RECORD_TRIAL=1` |
 
 Startup delays (~6–18 s) are baked in so each layer sees the topics it needs.
 

@@ -66,13 +66,19 @@ class DetectionNode(Node):
             imgsz=imgsz,
             use_tracking=True,
             draw=False,
-            profile=False,
+            # Per-stage timings (inference / post) for the trial log on
+            # /g1/detections. Only adds a timings_ms dict to the result;
+            # detections and commands are unaffected.
+            profile=True,
         )
 
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
         self._latest_depth: np.ndarray | None = None
+        # Capture stamp of that depth image. Color and depth are paired by
+        # arrival, not by stamp, so the trial log records the skew per frame.
+        self._latest_depth_stamp_ns: int | None = None
 
         # Camera intrinsics (filled from /camera/color/camera_info).
         # Needed to back-project the depth image into a full XYZ cloud so the
@@ -157,10 +163,14 @@ class DetectionNode(Node):
         xyz[:, :, 1] = self._v_term * depth_raw
         xyz[:, :, 2] = depth_raw
         self._latest_depth = xyz
+        self._latest_depth_stamp_ns = (
+            msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        )
 
     def _color_cb(self, msg: Image):
         if self._latest_depth is None:
             return
+        t_rx = self.get_clock().now().nanoseconds
 
         img = self._ros_image_to_numpy(msg)
         enc = msg.encoding
@@ -177,6 +187,7 @@ class DetectionNode(Node):
             color = img
         color = np.ascontiguousarray(color)
         point_cloud_xyz = self._latest_depth
+        depth_stamp_ns = self._latest_depth_stamp_ns
 
         T_map_camera   = self._get_camera_transform()
         T_world_optical = self._lookup_matrix(self._world_frame, self._optical_frame)
@@ -189,12 +200,19 @@ class DetectionNode(Node):
             T_odom_camera=T_map_camera,
             T_world_optical=T_world_optical,
         )
+        t_done = self.get_clock().now().nanoseconds
 
         self._publish_markers(result)
         self._publish_cmd(result)
         self._publish_detections(
             result, msg, (time.perf_counter() - t_start) * 1000.0,
             world_ok=T_world_optical is not None,
+            timing={
+                "t_rx": t_rx,                      # color callback entered
+                "t_done": t_done,                  # decision computed; /g1/human_cmd published next
+                "depth_stamp_ns": depth_stamp_ns,  # capture stamp of the paired depth image
+                "map_tf_ok": T_map_camera is not None,
+            },
         )
 
     def _lookup_matrix(self, target_frame: str, source_frame: str):
@@ -281,12 +299,19 @@ class DetectionNode(Node):
 
         self._pub_markers.publish(marker_array)
 
-    def _publish_detections(self, result: dict, src: Image, latency_ms: float, world_ok: bool):
-        """Serialise the Human_dtp result for the overlay renderer.
+    def _publish_detections(self, result: dict, src: Image, latency_ms: float, world_ok: bool,
+                            timing: dict | None = None):
+        """Serialise the Human_dtp result for the overlay renderer and the trial log.
 
         JSON on a std_msgs/String keeps this dependency-free (no custom .msg
         package to build). The payload is a few KB at most: N humans x 20
         prediction points.
+
+        Trial-log fields (ignored by the overlay): ``xz`` and ``pred_safety`` are
+        the smoothed position and forecast the STOP/SLOW decision actually used
+        (``world``/``pred`` are the separate visualisation track); ``state``
+        names the branch that produced ``cmd``; ``t_rx``/``t_done``,
+        ``depth_stamp_ns``, ``timings_ms`` and ``frame_idx`` time the frame.
         """
         if not world_ok and not self._warned_no_world_tf:
             self._warned_no_world_tf = True
@@ -307,6 +332,7 @@ class DetectionNode(Node):
                 "world": det.get("position_world_m"),
                 # Downsample the 20-step horizon; the line reads the same at 10.
                 "pred":  [[p["x"], p["y"]] for p in det.get("predictions_world", [])][::2],
+                **self._trial_det_fields(det),
             })
 
         agv = result.get("agv_movement", {})
@@ -320,12 +346,40 @@ class DetectionNode(Node):
             "state":      agv.get("range_state"),
             "closest_m":  agv.get("closest_human_depth_m"),
             "latency_ms": round(latency_ms, 1),
+            **self._trial_frame_fields(result, timing),
             "detections": dets,
         }
 
         msg = String()
         msg.data = json.dumps(payload, separators=(",", ":"))
         self._pub_dets.publish(msg)
+
+    # Trial-log extras. These run inside the camera callback, so they must never
+    # raise: on any failure the extra fields are omitted and the frame proceeds
+    # exactly as it would have without them.
+    @staticmethod
+    def _trial_det_fields(det: dict) -> dict:
+        try:
+            return {
+                # What the safety decision used (camera-frame x/z), full horizon.
+                "xz": det.get("position_xz_m"),
+                "pred_safety": [[round(p["x"], 3), round(p["z"], 3)]
+                                for p in det.get("predictions_xz", [])],
+                "missed": det.get("missed_frames"),
+            }
+        except Exception:
+            return {}
+
+    def _trial_frame_fields(self, result: dict, timing: dict | None) -> dict:
+        try:
+            return {
+                "frame_idx": self._predictor.frame_idx,
+                "inference_ran": result.get("inference_ran"),
+                "timings_ms": result.get("timings_ms"),
+                **(timing or {}),
+            }
+        except Exception:
+            return {}
 
     def _publish_cmd(self, result: dict):
         cmd = result.get("agv_movement", {}).get("command", "normal_operation")
