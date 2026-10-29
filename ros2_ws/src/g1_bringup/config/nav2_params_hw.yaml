@@ -16,7 +16,13 @@ bt_navigator:
     robot_base_frame: pelvis
     odom_topic: /odom        # ZED VIO odom (remapped from /zed/zed_node/odom in hardware.launch.py)
     bt_loop_duration: 10
-    default_server_timeout: 20
+    # How long a BT action node waits for its server (follow_path,
+    # compute_path_to_pose, ...) to acknowledge a goal. The Jazzy default of
+    # 20 ms was too short on the Thor: 6 of 10 goals in the 2026-10-27 trials
+    # aborted with "Timed out while waiting for action server to acknowledge
+    # goal request", and once the controller accepted the path anyway and
+    # walked the robot ~12 s after navigate_to_pose had reported ABORTED.
+    default_server_timeout: 200
     # BT XML paths intentionally omitted: hardcoding /opt/ros/humble/... segfaulted
     # bt_navigator on Jazzy (file absent). Leaving these unset makes Nav2 load its
     # own distro-correct default nav_to_pose / nav_through_poses trees.
