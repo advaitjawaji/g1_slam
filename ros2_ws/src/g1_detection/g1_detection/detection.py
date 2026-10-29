@@ -551,6 +551,29 @@ class HumanXZPredictor:
             return 1
         return 0
 
+    def _update_hold(self, raw_cmd, raw_state_str):
+        """Fold this frame's raw command into the held command (last_agv_cmd).
+        STOP and SLOW are held for agv_hold_max_frames processed frames."""
+        if raw_cmd == "stop":
+            self.last_agv_cmd = "stop"
+            self.last_agv_state_str = raw_state_str
+            self.agv_hold_counter = self.agv_hold_max_frames
+
+        elif raw_cmd == "slow_down":
+            if self.last_agv_cmd != "stop" or self.agv_hold_counter == 0:
+                self.last_agv_cmd = "slow_down"
+                self.last_agv_state_str = raw_state_str
+                self.agv_hold_counter = self.agv_hold_max_frames
+            else:
+                self.agv_hold_counter -= 1
+
+        else:
+            if self.agv_hold_counter > 0:
+                self.agv_hold_counter -= 1
+            else:
+                self.last_agv_cmd = "normal_operation"
+                self.last_agv_state_str = raw_state_str
+
     def _command_from_distance(self, dist_m, stop_dist_m, slow_dist_m):
         if dist_m < stop_dist_m:
             return "stop"
@@ -682,6 +705,11 @@ class HumanXZPredictor:
 
         if not detections:
             self._clear_stale_tracks()
+            # A frame with nobody detected still counts down the STOP/SLOW hold,
+            # so a person stepping out of view does not release a STOP at once.
+            self._update_hold("normal_operation", "no_human_or_clear")
+            output["agv_movement"]["command"] = self.last_agv_cmd
+            output["agv_movement"]["range_state"] = self.last_agv_state_str
             if self.profile:
                 output["timings_ms"] = {
                     "total": round((time.perf_counter() - t0) * 1000.0, 2),
@@ -990,25 +1018,7 @@ class HumanXZPredictor:
         if best_region is None and raw_cmd == "normal_operation":
             raw_state_str = "prediction_invalid_or_clear"
 
-        if raw_cmd == "stop":
-            self.last_agv_cmd = "stop"
-            self.last_agv_state_str = raw_state_str
-            self.agv_hold_counter = self.agv_hold_max_frames
-
-        elif raw_cmd == "slow_down":
-            if self.last_agv_cmd != "stop" or self.agv_hold_counter == 0:
-                self.last_agv_cmd = "slow_down"
-                self.last_agv_state_str = raw_state_str
-                self.agv_hold_counter = self.agv_hold_max_frames
-            else:
-                self.agv_hold_counter -= 1
-
-        else:
-            if self.agv_hold_counter > 0:
-                self.agv_hold_counter -= 1
-            else:
-                self.last_agv_cmd = "normal_operation"
-                self.last_agv_state_str = raw_state_str
+        self._update_hold(raw_cmd, raw_state_str)
 
         output["agv_movement"] = {
             "command": self.last_agv_cmd,
