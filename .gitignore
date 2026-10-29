@@ -13,3 +13,7 @@ model/
 *.zstd.run
 *.tar.xz
 ros2_ws/src/zed-ros2-wrapper/
+
+# Trial recordings (GBs, and video of people): keep them out of git, and off a
+# public remote. They belong on the robot or a backup drive.
+g1_trials/

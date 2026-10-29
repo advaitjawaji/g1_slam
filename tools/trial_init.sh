@@ -30,6 +30,17 @@ operator: ""
 g1_firmware: ""
 outcome: ""                              # success / failure, with reason
 notes: "${TRIAL_NOTES:-}"
+# Hand-measured ground truth, in metres from the start mark: x forward along
+# the lane, y to the robot's left. Leave a field blank if it was not measured.
+gt_end_x_m: ""                           # robot at rest: midpoint between the feet
+gt_end_y_m: ""
+gt_target_x_m: ""                        # cutout / standing person, if any
+gt_target_y_m: ""
+gt_side_video: ""                        # external camera's file name
+gt_sync_flashes: ""                      # how many, e.g. "2 (start, end)"
+camera_height_m: ""                      # ZED lens above the floor
+battery_pct_start: ""                    # from the Unitree app
+battery_pct_end: ""
 EOF
 fi
 
