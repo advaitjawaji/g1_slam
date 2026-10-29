@@ -1,0 +1,14 @@
+# Overrides for the ZED wrapper (v5.4.0), passed by run_zed_e2e.sh as
+# ros_params_override_path. Only the parameters listed here change; everything
+# else keeps the wrapper's common_stereo.yaml / zed2i.yaml values.
+/**:
+    ros__parameters:
+        pos_tracking:
+            # Wrapper default: true, i.e. on every loop closure odometry is
+            # re-initialised to the corrected pose. /zed/zed_node/odom (relayed
+            # to /odom, which Nav2 and the trial metrics use) then jumps: 0.3 to
+            # 1.75 m in 5 of 9 trials on 2026-10-27, and the jumps checked
+            # coincided with spatial_memory_status = LOOP_CLOSED. This pipeline
+            # navigates in odom with no map frame, so odometry must stay
+            # continuous; slow drift is the accepted trade-off.
+            reset_odom_with_loop_closure: false

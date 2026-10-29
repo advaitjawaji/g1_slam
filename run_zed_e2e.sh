@@ -177,6 +177,16 @@ fi
 
 URDF_PATH="$(source /opt/ros/${ROS_DISTRO_NAME}/setup.bash && source $WS_DIR/install/setup.bash 2>/dev/null && ros2 pkg prefix g1_description 2>/dev/null)/share/g1_description/urdf/g1_29dof.urdf"
 NAV2_PARAMS="$(source /opt/ros/${ROS_DISTRO_NAME}/setup.bash && source $WS_DIR/install/setup.bash 2>/dev/null && ros2 pkg prefix g1_bringup 2>/dev/null)/share/g1_bringup/config/nav2_params_hw.yaml"
+# ZED wrapper parameter overrides (keeps VIO odometry continuous across loop
+# closures; see the file). Installed with g1_bringup, so rebuild it after edits.
+ZED_OVERRIDES="$(dirname "$NAV2_PARAMS")/zed_overrides.yaml"
+if [[ -f "$ZED_OVERRIDES" ]]; then
+    ZED_OVERRIDE_ARG="ros_params_override_path:=$ZED_OVERRIDES"
+else
+    echo "WARNING: $ZED_OVERRIDES not installed (colcon build --packages-select g1_bringup);"
+    echo "         the ZED runs with wrapper defaults, so /odom can jump on loop closures."
+    ZED_OVERRIDES=""; ZED_OVERRIDE_ARG=""
+fi
 
 # ── Kill old session ──────────────────────────────────────────────────────
 # A previous launch that was never stopped may still be recording: close it out
@@ -239,6 +249,7 @@ svo_compression: $SVO_COMPRESSION
 git_commit: $(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
 git_dirty: $([[ -n "$(git -C "$REPO_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]] && echo true || echo false)
 nav2_params: "$NAV2_PARAMS"
+zed_overrides: "$ZED_OVERRIDES"
 urdf: "$URDF_PATH"
 EOF
     TRIAL_NAME="$TRIAL_NAME" TRIAL_ENV="$TRIAL_ENV" TRIAL_PEDS="$TRIAL_PEDS" \
@@ -278,7 +289,7 @@ log_pane $SESSION:core.3 nav2
 
 # Pane 0 - ZED
 tmux send-keys -t $SESSION:core.0 \
-    "$SOURCE_CMD && echo '=== ZED ===' && ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i $ZED_TRACK_ARGS" Enter
+    "$SOURCE_CMD && echo '=== ZED ===' && ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i $ZED_TRACK_ARGS $ZED_OVERRIDE_ARG" Enter
 
 # Pane 1 - odom source: RTAB-Map VO (default) OR a relay of ZED VIO odom
 if [[ "$USE_ZED_ODOM" == "1" ]]; then

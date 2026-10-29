@@ -43,6 +43,8 @@ git -C "$REPO_DIR" diff HEAD                 > "$TRIAL_DIR/code/git_diff.patch" 
       ros2_ws/src/g1_robot/g1_robot/*.py \
       ros2_ws/src/g1_bringup/config 2>/dev/null )
 cp "$NAV2_PARAMS" "$TRIAL_DIR/snapshot/nav2_params_hw.installed.yaml" 2>/dev/null
+ZED_OVERRIDES="$(dirname "$NAV2_PARAMS")/zed_overrides.yaml"
+cp "$ZED_OVERRIDES" "$TRIAL_DIR/snapshot/zed_overrides.installed.yaml" 2>/dev/null
 
 # The installed package is what runs, not src/. A stale build (src edited, not
 # rebuilt) is flagged here so a trial is never attributed to code that didn't run.
@@ -63,6 +65,10 @@ cp "$NAV2_PARAMS" "$TRIAL_DIR/snapshot/nav2_params_hw.installed.yaml" 2>/dev/nul
     src_p="$WS_DIR/src/g1_bringup/config/nav2_params_hw.yaml"
     if cmp -s "$src_p" "$NAV2_PARAMS"; then echo "same     g1_bringup/nav2_params_hw.yaml"
     else echo "STALE    g1_bringup/nav2_params_hw.yaml (installed copy differs from src)"; fi
+    src_z="$WS_DIR/src/g1_bringup/config/zed_overrides.yaml"
+    if [[ ! -f "$ZED_OVERRIDES" ]]; then echo "MISSING  g1_bringup/zed_overrides.yaml (not installed)"
+    elif cmp -s "$src_z" "$ZED_OVERRIDES"; then echo "same     g1_bringup/zed_overrides.yaml"
+    else echo "STALE    g1_bringup/zed_overrides.yaml (installed copy differs from src)"; fi
 } > "$TRIAL_DIR/code/install_vs_src.txt"
 
 # ── Versions ──────────────────────────────────────────────────────────────
