@@ -46,7 +46,10 @@ class G1Robot(RobotInterface):
             else:
                 ChannelFactory().Init(0)
             self._client = LocoClient()
-            self._client.SetTimeout(10.0)
+            # Was 10 s: a call that got no reply froze robot_node for 10 s, during
+            # which no STOP could be sent (trials 20261027_173238, _180825). A
+            # normal reply takes ~2 ms.
+            self._client.SetTimeout(config.sdk_timeout_s)
             self._client.Init()
             time.sleep(1.0)  # give SDK time to establish DDS connection
 
@@ -71,19 +74,22 @@ class G1Robot(RobotInterface):
             print(f"[G1 STUB] {cmd.mode.name}  vx={cmd.vx:.2f}  vy={cmd.vy:.2f}  wz={cmd.wz:.2f}")
             return True
 
+        # SetVelocity is what StopMove() and Move() call internally, with the
+        # same arguments, but it also returns the robot's reply code (0 = OK)
+        # where they discard it.
         with self._lock:
             self.last_sent = None
             self.last_ret = None
             try:
                 if cmd.mode == RobotMode.STOP:
-                    self.last_ret = self._client.StopMove()
+                    self.last_ret = self._client.SetVelocity(0.0, 0.0, 0.0)
                 else:
                     vx  = float(max(-self.MAX_VX,   min(self.MAX_VX,   cmd.vx)))
                     vy  = float(max(-self.MAX_VY,   min(self.MAX_VY,   cmd.vy)))
                     wz  = float(max(-self.MAX_VYAW, min(self.MAX_VYAW, cmd.wz)))
-                    self.last_ret = self._client.Move(vx, vy, wz)
+                    self.last_ret = self._client.SetVelocity(vx, vy, wz, 1)  # = Move()
                     self.last_sent = (vx, vy, wz)
-                return True
+                return self.last_ret == 0
             except Exception as e:
                 print(f"[G1] send_command failed: {e}")
                 return False
