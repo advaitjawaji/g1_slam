@@ -440,7 +440,7 @@ if [[ "$OVERLAY" == "1" ]]; then
 fi
 if [[ "$RECORD_TRIAL" == "1" ]]; then
     echo "Trial folder:          $TRIAL_DIR"
-    echo "  wait for 'Snapshot ... done' in window 'trial' (~65 s) before starting the run"
+    echo "  wait for 'Snapshot ... done' in window 'trial' (~40 s) before starting the run"
     echo "  send a logged goal:  python3 tools/send_goal.py 3.0 0.0"
     echo "  mark a moment:       python3 tools/trial_event.py --kind ped_start \"P1 starts walking\""
     echo "  IMPORTANT:           stop with './run_zed_e2e.sh stop' so the bag and video close cleanly"

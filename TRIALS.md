@@ -20,7 +20,7 @@ cd ~/Desktop/g1_slam/ros2_ws && colcon build --packages-select g1_detection g1_r
 TRIAL_NAME=corridor_2ped TRIAL_ENV=corridor TRIAL_PEDS=2 TRIAL_PED_SPEED=normal \
   WITH_ROBOT=1 NET_IFACE=<nic> USE_ZED_ODOM=1 ./run_zed_e2e.sh
 
-# 3. Wait for "Snapshot ... done" in tmux window 'trial' (~65 s), then run:
+# 3. Wait for "Snapshot ... done" in tmux window 'trial' (~40 s), then run:
 python3 tools/send_goal.py 3.0 0.0                                   # logged goal
 python3 tools/trial_event.py --kind ped_start "P1 starts walking"    # mark moments
 python3 tools/trial_event.py --kind failure "robot did not stop for P1"
