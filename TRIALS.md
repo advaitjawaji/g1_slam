@@ -5,8 +5,10 @@ the rosbag, every component's console output, ROS node logs, live parameters,
 the TF tree, the G1's onboard state, the overlay video, and the exact code and
 software versions that ran. Turn it off with `RECORD_TRIAL=0`.
 
-> **Status: not yet run on hardware.** Treat the first trial as a shakedown and
-> read the `trial_check` report it prints on stop.
+> **Status:** a shakedown on the Jetson Thor (ROS 2 Jazzy) on 2026-10-27 recorded
+> nine complete robot trials and found the problems fixed on branch `thor-fixes`
+> (see [Changes to the validated pipeline](#changes-to-the-validated-pipeline)).
+> Those fixes have not run on the robot yet: shake them down before collecting data.
 
 ---
 
@@ -14,7 +16,7 @@ software versions that ran. Turn it off with `RECORD_TRIAL=0`.
 
 ```bash
 # 1. Rebuild after pulling: the installed build is what runs, not src/.
-cd ~/Desktop/g1_slam/ros2_ws && colcon build --packages-select g1_detection g1_robot && cd ..
+cd ~/Desktop/g1_slam/ros2_ws && colcon build --packages-select g1_detection g1_robot g1_bringup && cd ..
 
 # 2. Launch with trial metadata (all TRIAL_* are optional; edit trial.yaml later)
 TRIAL_NAME=corridor_2ped TRIAL_ENV=corridor TRIAL_PEDS=2 TRIAL_PED_SPEED=normal \
@@ -104,8 +106,13 @@ All ROS timestamps and `robot_state` rows share the host clock
 - `/g1/robot_cmd` (JSON, per event, from `robot_node`): `human_cmd` (received
   command, override state, scale), `stop_move` (`t_call`), `cmd_vel` (velocity in,
   whether blocked, velocity actually sent after scaling and clamping). `t` minus
-  `t_call` is how long the SDK call blocked. The `ret` field is always `null`:
-  the SDK's `Move()` and `StopMove()` discard the robot's reply code.
+  `t_call` is how long the SDK call blocked. `ret` is the robot's reply code
+  (0 = OK, 3104 = no reply within `sdk_timeout_s`) and `ok` is `ret == 0`. In
+  trials recorded before branch `thor-fixes`, `ret` is always `null`.
+
+`trial_check` also reads the bag (`tools/trial_flags.py`) and warns about
+odometry jumps, SDK calls that blocked or failed, aborted goals, walking
+commands after a goal ended, STOP flicker and Nav2 timeouts.
 
 ## What recording cannot do
 
@@ -131,13 +138,27 @@ All ROS timestamps and `robot_state` rows share the host clock
 
 ## Changes to the validated pipeline
 
-Recording required small, publish-only additions to code that ran on hardware.
-The STOP/SLOW decision logic and the commands sent to the robot are unchanged:
+**Recording only (branch `trial-recording`).** Small, publish-only additions;
+the STOP/SLOW decision logic and the commands sent to the robot are unchanged:
 
 - `detection_node.py`: extra JSON fields on `/g1/detections`; `profile=True` (adds
   `timings_ms` only).
 - `robot_node.py`: new `/g1/robot_cmd` log publisher.
 - `g1.py`: records the last command sent and the SDK return value.
 
-`tools/test_detection_payload.py`, `tools/test_detection_world_track.py` and
-`tools/test_state_logger_rows.py` pass with these changes.
+**Fixes from the 2026-10-27 shakedown (branch `thor-fixes`).** These change
+behaviour. Each is its own commit, so any one can be reverted:
+
+| Change | Problem it fixes | Behaviour change |
+|---|---|---|
+| `detection.py`: frames with no detections count down the STOP/SLOW hold | First empty frame released STOP while the person was still beside the robot; STOP flicker | STOP/SLOW persist `agv_hold_max_frames` (15) processed frames after a person leaves view |
+| `g1.py`: SDK timeout 10 s → 0.25 s (`sdk_timeout_s`), calls via `SetVelocity` | `robot_node` froze 10 s on a lost reply; reply code discarded | Identical requests to the robot; a lost reply now costs ≤ ~0.5 s |
+| `robot_node.py`: SDK calls from a sender thread | STOP queued behind a blocked call; stale velocities sent after it | Normal operation sends the same calls; under delay, STOP goes first and stale velocities are dropped |
+| `nav2_params_hw.yaml`: `default_server_timeout` 20 → 200 ms | 6 of 10 goals aborted; controller kept walking after an abort | Fewer spurious aborts |
+| `zed_overrides.yaml`: `reset_odom_with_loop_closure: false` | `/odom` jumped up to 1.75 m on loop closures | Continuous odometry; slow drift instead of jumps |
+| Launcher: no second Nav2 STARTUP call | "Aborting bringup" error on every launch | None (autostart already brought Nav2 up) |
+
+Tests: `tools/test_detection_hold.py`, `tools/test_robot_sender.py`,
+`tools/test_trial_flags.py`, `tools/test_graph_snapshot.py`, plus the earlier
+`test_detection_payload.py`, `test_detection_world_track.py`,
+`test_overlay_geometry.py` and `test_state_logger_rows.py`.
