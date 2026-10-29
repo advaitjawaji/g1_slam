@@ -308,9 +308,11 @@ fi
 tmux send-keys -t $SESSION:core.2 \
     "$SOURCE_CMD && sleep 12 && echo '=== DETECTION ===' && ros2 run g1_detection detection_node --ros-args -p model_path:=yolo26n.pt -p color_topic:=/zed/zed_node/rgb/color/rect/image -p depth_topic:=/zed/zed_node/depth/depth_registered -p camera_info_topic:=/zed/zed_node/rgb/color/rect/camera_info -p camera_frame:=zed_left_camera_frame -p world_frame:=odom" Enter
 
-# Pane 3 - Nav2 + auto-activate
+# Pane 3 - Nav2. navigation_launch.py's lifecycle manager brings every node up
+# itself (autostart); a second manual STARTUP call only failed against the
+# already-active nodes ("Aborting bringup") in the 2026-10-27 trials.
 tmux send-keys -t $SESSION:core.3 \
-    "$SOURCE_CMD && sleep 14 && echo '=== NAV2 ===' && (ros2 launch nav2_bringup navigation_launch.py use_sim_time:=false params_file:=$NAV2_PARAMS) & sleep 12 && ros2 service call /lifecycle_manager_navigation/manage_nodes nav2_msgs/srv/ManageLifecycleNodes '{command: 0}' && wait" Enter
+    "$SOURCE_CMD && sleep 14 && echo '=== NAV2 (autostart) ===' && ros2 launch nav2_bringup navigation_launch.py use_sim_time:=false autostart:=true params_file:=$NAV2_PARAMS" Enter
 
 # ── Window 'extras' ───────────────────────────────────────────────────────
 tmux new-window -t $SESSION -n extras
