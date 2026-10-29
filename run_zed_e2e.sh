@@ -139,7 +139,8 @@ finish_trial() {
     echo "end_time: $(date --iso-8601=seconds)" >> "$dir/launch_info.yaml"
     echo ""
     echo "Trial saved: $dir"
-    python3 "$REPO_DIR/tools/trial_check.py" "$dir" || true
+    # Sourced, so the behaviour flags can read the bag with rosbag2_py.
+    bash -c "$SOURCE_CMD && python3 '$REPO_DIR/tools/trial_check.py' '$dir'" || true
 }
 
 # ── stop ──────────────────────────────────────────────────────────────────

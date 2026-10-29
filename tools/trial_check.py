@@ -5,8 +5,11 @@ Check that a trial folder captured everything. Run automatically by
 
     python3 tools/trial_check.py ~/g1_trials/20261026_141500_corridor_2ped
 
-Reads only files (bag metadata.yaml, CSVs, snapshots), so it needs no ROS.
-Exit code 1 if anything REQUIRED is missing, so it can gate a batch script.
+Completeness is checked from files alone (bag metadata.yaml, CSVs, snapshots),
+so that part needs no ROS. The behaviour flags (tools/trial_flags.py) read the
+bag itself, with rosbag2_py or the mcap pip packages; without either they are
+skipped. Exit code 1 if anything REQUIRED is missing, so it can gate a batch
+script.
 """
 from __future__ import annotations
 
@@ -213,6 +216,33 @@ def check_files(trial, record_video):
     if empty:
         warnings.append("trial.yaml fields still empty: " + ", ".join(empty))
 
+    lc = os.path.join(trial, "snapshot", "lifecycle.txt")
+    if os.path.exists(lc):
+        with open(lc) as f:
+            states = [ln.strip() for ln in f if ln.strip()]
+        down = [s for s in states if not s.endswith(": active")]
+        print(f"  snapshot/lifecycle.txt {len(states)} lifecycle nodes, {len(down)} not active")
+        for s in down:
+            warnings.append(f"lifecycle node not active at snapshot: {s}")
+
+
+def check_flags(trial):
+    """Behaviour seen in the bag (tools/trial_flags.py): odometry jumps, blocked
+    SDK calls, goal outcomes, STOP flicker, Nav2 timeouts."""
+    print("\nBehaviour flags (from the bag):")
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import trial_flags
+        lines, warns = trial_flags.analyze(trial)
+    except ImportError as exc:
+        print(f"  skipped: {exc} (source ROS 2 first, or pip install mcap mcap-ros2-support)")
+        return
+    except Exception as exc:                 # a damaged bag must not hide the rest of the report
+        print(f"  skipped: could not read the bag ({exc})")
+        return
+    print("\n".join(lines))
+    warnings.extend(warns)
+
 
 def main() -> int:
     if len(sys.argv) != 2:
@@ -237,6 +267,10 @@ def main() -> int:
     check_robot_state(trial, with_robot)
     check_system_and_svo(trial, str(launch.get("svo", "0")) == "1")
     check_files(trial, record_video)
+    check_flags(trial)
+    if with_robot and not goal_sent:
+        warnings.append("no goal_sent event: send goals with tools/send_goal.py so each goal "
+                        "and its result are logged (RViz goals leave no record)")
 
     print()
     for w in warnings:
